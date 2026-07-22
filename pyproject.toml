@@ -1,0 +1,27 @@
+[project]
+name = "rop-forge"
+version = "0.1.0"
+description = "Automated ROP-chain exploit generator for 64-bit Linux ELF binaries"
+readme = "PRD.md"
+requires-python = ">=3.11,<3.14"
+authors = [{ name = "Ved Prasad" }]
+dependencies = [
+    "pyelftools>=0.31",
+    "capstone>=5.0.1",
+    "pwntools>=4.13.0",
+]
+
+[project.scripts]
+rop-forge = "rop_forge.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rop_forge"]

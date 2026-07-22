@@ -47,6 +47,7 @@ Primary "user" is a security-minded engineer who has a vulnerable binary and wan
 | Layer | Choice | Rationale |
 |---|---|---|
 | Core language | Python 3.11+ | Fast iteration, strong ecosystem for binary tooling |
+| Dev/build environment | `uv` for dependency management; a Linux (x86-64) devcontainer via Docker/colima when developing on a non-Linux host | Target is Linux-ELF-only — `pwntools.process()` must fork/exec real ELF binaries, and `unicorn` (a `pwntools` dep) has no macOS-arm64 wheel. Not part of the shipped package: on native Linux, `uv sync` alone is sufficient, no container required |
 | ELF parsing | `pyelftools` | Don't hand-roll ELF parsing — not the point of the project |
 | Disassembly | `capstone` | Industry-standard disassembly engine, clean Python bindings |
 | Process interaction / exploit runtime | `pwntools` (`process`, `remote`, `context`, `cyclic`) | Standard for interacting with target processes; used as infrastructure, not as the solver |
