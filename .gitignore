@@ -1,7 +1,7 @@
 # --- Project-specific (rop-forge) ---
 core
 *.core
-fixtures/build/*.o
+fixtures/build/
 .chain_cache/
 
 # macOS
@@ -154,11 +154,9 @@ pids
 *.seed
 *.pid.lock
 
-# Claude Code (personal/local overrides only — CLAUDE.md and
-# .claude/settings.json are meant to be committed)
-.claude/settings.local.json
+# Claude Code (local tooling config — not committed to this repo)
+.claude/
 CLAUDE.local.md
-.claude/agent-memory-local/
 
 # Temporary folders
 tmp/
