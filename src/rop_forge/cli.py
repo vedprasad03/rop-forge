@@ -3,6 +3,8 @@
 import argparse
 import sys
 
+from rop_forge.analyzer import analyze_protections
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -20,7 +22,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    print(f"rop-forge: pipeline not yet implemented (target={args.binary})", file=sys.stderr)
+
+    try:
+        protections = analyze_protections(args.binary)
+    except (FileNotFoundError, IsADirectoryError) as exc:
+        print(f"rop-forge: cannot read binary '{args.binary}': {exc}", file=sys.stderr)
+        return 2
+
+    print(f"NX:     {'enabled' if protections.nx else 'disabled'}")
+    print(f"PIE:    {'enabled' if protections.pie else 'disabled'}")
+    print(f"Canary: {'enabled' if protections.canary else 'disabled'}")
+    print(f"RELRO:  {protections.relro.value}")
+
+    print("rop-forge: remaining pipeline stages not yet implemented", file=sys.stderr)
     return 1
 
 
