@@ -14,7 +14,9 @@ def test_parser_requires_binary():
 def test_main_returns_nonzero_until_pipeline_exists(capsys, fixture_path):
     exit_code = main([str(fixture_path("fixture1_none"))])
     assert exit_code == 1
-    assert "NX:" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "NX:" in out
+    assert "Found" in out and "gadgets" in out
 
 
 def test_main_reports_missing_binary():
@@ -30,7 +32,13 @@ def test_stage_analyzer_runs_standalone(capsys, fixture_path):
     assert "RELRO:" in out
 
 
-@pytest.mark.parametrize("stage", ["gadgets", "offset", "chainer", "leak", "exploit"])
+def test_stage_gadgets_runs_standalone(capsys, fixture_path):
+    exit_code = main([str(fixture_path("fixture1_none")), "--stage", "gadgets"])
+    assert exit_code == 0
+    assert "Found" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stage", ["offset", "chainer", "leak", "exploit"])
 def test_unimplemented_stage_reports_clearly(capsys, fixture_path, stage):
     exit_code = main([str(fixture_path("fixture1_none")), "--stage", stage])
     assert exit_code == 1
