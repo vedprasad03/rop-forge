@@ -4,6 +4,9 @@ core
 fixtures/build/
 .chain_cache/
 
+# Personal engineering log (local-only, not part of the repo)
+ENGINEERING_LOG.md
+
 # macOS
 .DS_Store
 .DS_Store?
