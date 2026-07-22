@@ -4,6 +4,9 @@ import argparse
 import sys
 
 from rop_forge.analyzer import Protections, analyze_protections
+from rop_forge.gadgets import GadgetDatabase, GadgetKind, scan_gadgets
+
+_EXAMPLES_PER_KIND = 5
 
 STAGES = ["analyzer", "gadgets", "offset", "chainer", "leak", "exploit"]
 
@@ -43,6 +46,24 @@ def _run_analyzer(binary_path: str) -> int:
     return 0
 
 
+def _print_gadgets(db: GadgetDatabase) -> None:
+    print(f"Found {len(db)} gadgets")
+    for kind in GadgetKind:
+        matches = db.by_kind(kind)
+        if not matches:
+            continue
+        print(f"\n{kind.value} ({len(matches)}):")
+        for gadget in matches[:_EXAMPLES_PER_KIND]:
+            print(f"  {gadget}")
+        if len(matches) > _EXAMPLES_PER_KIND:
+            print(f"  ... and {len(matches) - _EXAMPLES_PER_KIND} more")
+
+
+def _run_gadgets(binary_path: str) -> int:
+    _print_gadgets(scan_gadgets(binary_path))
+    return 0
+
+
 def _stage_not_yet_implemented(stage: str):
     def _run(binary_path: str) -> int:
         print(f"rop-forge: stage '{stage}' not yet implemented", file=sys.stderr)
@@ -53,7 +74,7 @@ def _stage_not_yet_implemented(stage: str):
 
 STAGE_RUNNERS = {
     "analyzer": _run_analyzer,
-    "gadgets": _stage_not_yet_implemented("gadgets"),
+    "gadgets": _run_gadgets,
     "offset": _stage_not_yet_implemented("offset"),
     "chainer": _stage_not_yet_implemented("chainer"),
     "leak": _stage_not_yet_implemented("leak"),
@@ -62,9 +83,10 @@ STAGE_RUNNERS = {
 
 
 def _run_full_pipeline(binary_path: str) -> int:
-    exit_code = _run_analyzer(binary_path)
-    if exit_code != 0:
-        return exit_code
+    for stage_runner in (_run_analyzer, _run_gadgets):
+        exit_code = stage_runner(binary_path)
+        if exit_code != 0:
+            return exit_code
     print("rop-forge: remaining pipeline stages not yet implemented", file=sys.stderr)
     return 1
 

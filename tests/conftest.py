@@ -18,3 +18,30 @@ def fixture_path():
         return FIXTURES_BUILD_DIR / name
 
     return _fixture_path
+
+
+# The "known libc" tests scan against (PRD.md §7 Phase 2) is the devcontainer's
+# own system glibc, resolved by path rather than committed to the repo — this
+# is a large redistributable binary blob, and it's already what our fixtures
+# link against, consistent with the project's Linux-only devcontainer
+# architecture (see ENGINEERING_LOG.md).
+_LIBC_CANDIDATES = [
+    Path("/lib/x86_64-linux-gnu/libc.so.6"),
+    Path("/usr/lib/x86_64-linux-gnu/libc.so.6"),
+    Path("/lib64/libc.so.6"),
+]
+
+
+@pytest.fixture(scope="session")
+def libc_path() -> Path:
+    for candidate in _LIBC_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    pytest.skip("no system glibc found at any known path")
+
+
+@pytest.fixture(scope="session")
+def libc_gadgets(libc_path):
+    from rop_forge.gadgets import scan_gadgets
+
+    return scan_gadgets(libc_path)
