@@ -53,7 +53,8 @@ Primary "user" is a security-minded engineer who has a vulnerable binary and wan
 | Process interaction / exploit runtime | `pwntools` (`process`, `remote`, `context`, `cyclic`) | Standard for interacting with target processes; used as infrastructure, not as the solver |
 | Target fixtures | C, compiled with `gcc` under varying flags | Need real binaries with real protection combinations |
 | Testing | `pytest` | Unit tests for gadget parsing, offset detection, chain search |
-| Packaging | `pyproject.toml`, installable as a CLI (`rop-forge <binary>`) | Makes it usable/demoable as a real tool, not just a script |
+| Packaging | `pyproject.toml`, installable as a CLI. Primary interface is `rop-forge <binary>` (full pipeline, exploit out). `--stage {analyzer,gadgets,offset,chainer,leak,exploit}` runs a single stage standalone and prints its output — a thin wrapper around the same module function the full pipeline calls internally, not a parallel implementation | Makes it usable/demoable as a real tool, not just a script; per-stage access is nearly free given each module (§6.2) already has to expose a clean, independently-testable function |
+| Distribution | Publish to PyPI once core phases (through at least Phase 4/5) are complete and stable | `pip install`-able is a stronger portfolio artifact than "clone and run"; needs a clear authorized-use disclaimer in the README once it's a one-command install, and the Linux-x86-64 requirement documented (see Dev/build environment row) |
 | Demo/docs | `asciinema` recording + README | Portfolio artifact quality |
 
 **Explicitly not used as the exploit solver:** `pwntools.rop.ROP`, `angrop`, `ropper`'s automated chaining. These may be referenced in the README as prior art / points of comparison, and pwntools' lower-level primitives (`cyclic`, `process`, `context.binary`) are fine to use as infrastructure — but the gadget search and chain construction logic are all implemented from scratch.
