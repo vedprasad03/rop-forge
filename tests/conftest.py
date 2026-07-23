@@ -12,7 +12,7 @@ def build_fixtures():
     subprocess.run(["make", "-C", str(FIXTURES_DIR)], check=True)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def fixture_path():
     def _fixture_path(name: str) -> Path:
         return FIXTURES_BUILD_DIR / name
@@ -45,3 +45,10 @@ def libc_gadgets(libc_path):
     from rop_forge.gadgets import scan_gadgets
 
     return scan_gadgets(libc_path)
+
+
+@pytest.fixture(scope="session")
+def execve_chain_fixture1(fixture_path):
+    from rop_forge.chainer import build_execve_chain
+
+    return build_execve_chain(fixture_path("fixture1_none"))

@@ -4,6 +4,12 @@ import argparse
 import sys
 
 from rop_forge.analyzer import Protections, analyze_protections
+from rop_forge.chainer import (
+    Chain,
+    ChainNotFoundError,
+    build_execve_chain,
+    verify_shell,
+)
 from rop_forge.gadgets import GadgetDatabase, GadgetKind, scan_gadgets
 from rop_forge.offset import OffsetNotFoundError, find_offset
 
@@ -42,8 +48,8 @@ def _print_protections(protections: Protections) -> None:
     print(f"RELRO:  {protections.relro.value}")
 
 
-def _run_analyzer(binary_path: str) -> int:
-    _print_protections(analyze_protections(binary_path))
+def _run_analyzer(args: argparse.Namespace) -> int:
+    _print_protections(analyze_protections(args.binary))
     return 0
 
 
@@ -60,19 +66,36 @@ def _print_gadgets(db: GadgetDatabase) -> None:
             print(f"  ... and {len(matches) - _EXAMPLES_PER_KIND} more")
 
 
-def _run_gadgets(binary_path: str) -> int:
-    _print_gadgets(scan_gadgets(binary_path))
+def _run_gadgets(args: argparse.Namespace) -> int:
+    _print_gadgets(scan_gadgets(args.binary))
     return 0
 
 
-def _run_offset(binary_path: str) -> int:
-    offset = find_offset(binary_path)
+def _run_offset(args: argparse.Namespace) -> int:
+    offset = find_offset(args.binary)
     print(f"Offset to return address: {offset} bytes")
     return 0
 
 
+def _print_chain(chain: Chain) -> None:
+    print(f"Chain ({len(chain)} elements, {len(chain.payload())} payload bytes):")
+    print(chain)
+
+
+def _run_chainer(args: argparse.Namespace) -> int:
+    chain = build_execve_chain(args.binary, libc_path=args.libc)
+    _print_chain(chain)
+    if args.run:
+        offset = find_offset(args.binary)
+        ok = verify_shell(args.binary, chain, offset)
+        print()
+        print("Shell verified — got real command execution" if ok else "Shell verification failed")
+        return 0 if ok else 4
+    return 0
+
+
 def _stage_not_yet_implemented(stage: str):
-    def _run(binary_path: str) -> int:
+    def _run(args: argparse.Namespace) -> int:
         print(f"rop-forge: stage '{stage}' not yet implemented", file=sys.stderr)
         return 1
 
@@ -83,15 +106,15 @@ STAGE_RUNNERS = {
     "analyzer": _run_analyzer,
     "gadgets": _run_gadgets,
     "offset": _run_offset,
-    "chainer": _stage_not_yet_implemented("chainer"),
+    "chainer": _run_chainer,
     "leak": _stage_not_yet_implemented("leak"),
     "exploit": _stage_not_yet_implemented("exploit"),
 }
 
 
-def _run_full_pipeline(binary_path: str) -> int:
+def _run_full_pipeline(args: argparse.Namespace) -> int:
     for stage_runner in (_run_analyzer, _run_gadgets, _run_offset):
-        exit_code = stage_runner(binary_path)
+        exit_code = stage_runner(args)
         if exit_code != 0:
             return exit_code
     print("rop-forge: remaining pipeline stages not yet implemented", file=sys.stderr)
@@ -104,11 +127,14 @@ def main(argv: list[str] | None = None) -> int:
 
     runner = STAGE_RUNNERS[args.stage] if args.stage else _run_full_pipeline
     try:
-        return runner(args.binary)
+        return runner(args)
     except (FileNotFoundError, IsADirectoryError) as exc:
         print(f"rop-forge: cannot read binary '{args.binary}': {exc}", file=sys.stderr)
         return 2
     except OffsetNotFoundError as exc:
+        print(f"rop-forge: {exc}", file=sys.stderr)
+        return 3
+    except ChainNotFoundError as exc:
         print(f"rop-forge: {exc}", file=sys.stderr)
         return 3
 

@@ -21,6 +21,36 @@ _DIVERTING_GROUPS = {CS_GRP_JUMP, CS_GRP_CALL, CS_GRP_IRET}
 
 _RSP_REG_NAMES = {"rsp", "esp"}
 
+# Maps every x86-64 GPR sub-register name to its 64-bit family, so a write to
+# e.g. "eax" can be recognized as clobbering "rax" — capstone's regs_access()
+# reports the exact accessed width, not a canonicalized register id.
+_REG_FAMILIES = {
+    name: family
+    for family, names in {
+        "rax": ("rax", "eax", "ax", "al", "ah"),
+        "rbx": ("rbx", "ebx", "bx", "bl", "bh"),
+        "rcx": ("rcx", "ecx", "cx", "cl", "ch"),
+        "rdx": ("rdx", "edx", "dx", "dl", "dh"),
+        "rsi": ("rsi", "esi", "si", "sil"),
+        "rdi": ("rdi", "edi", "di", "dil"),
+        "rbp": ("rbp", "ebp", "bp", "bpl"),
+        "rsp": ("rsp", "esp", "sp", "spl"),
+        **{
+            f"r{n}": (f"r{n}", f"r{n}d", f"r{n}w", f"r{n}b")
+            for n in range(8, 16)
+        },
+    }.items()
+    for name in names
+}
+
+
+def _reg_family(name: str) -> str:
+    return _REG_FAMILIES.get(name, name)
+
+
+def _is_ret_terminated(insns) -> bool:
+    return CS_GRP_RET in insns[-1].groups
+
 
 def scan_gadgets(
     binary_path: str | Path,
@@ -100,7 +130,22 @@ def _is_diverting(insn) -> bool:
 
 def _build_gadget(insns) -> Gadget:
     texts = tuple(f"{insn.mnemonic} {insn.op_str}".strip() for insn in insns)
-    return Gadget(address=insns[0].address, instructions=texts, kind=_classify(insns))
+    kind = _classify(insns)
+    # pop_order/mem_write feed the chain builder, which assumes a gadget's
+    # own `ret` consumes the next stack value in sequence — a jmp-reg/
+    # call-reg terminated gadget doesn't do that (it jumps to whatever that
+    # register holds instead), so it's still classified normally for
+    # display but exposes no structured effect data to build on.
+    ret_terminated = _is_ret_terminated(insns)
+    return Gadget(
+        address=insns[0].address,
+        instructions=texts,
+        kind=kind,
+        pop_order=_extract_pop_order(insns) if kind == GadgetKind.POP_REG and ret_terminated else (),
+        mem_write=(
+            _extract_mem_write(insns) if kind == GadgetKind.MOV_MEM and ret_terminated else None
+        ),
+    )
 
 
 def _classify(insns) -> GadgetKind:
@@ -132,5 +177,52 @@ def _is_stack_pivot(insns) -> bool:
 def _has_mem_write(insns) -> bool:
     for insn in insns:
         if insn.mnemonic == "mov" and insn.operands and insn.operands[0].type == CS_OP_MEM:
+            return True
+    return False
+
+
+def _extract_pop_order(insns) -> tuple[str, ...]:
+    order = []
+    for insn in insns[:-1]:  # exclude the terminator
+        if insn.mnemonic == "pop" and insn.operands and insn.operands[0].type == CS_OP_REG:
+            order.append(insn.reg_name(insn.operands[0].reg))
+    return tuple(order)
+
+
+def _extract_mem_write(insns) -> tuple[str, str, int] | None:
+    # Only simple base(+disp) destinations with a register-sourced value are
+    # usable as a controllable write primitive — an immediate source can't
+    # be repointed at arbitrary data, an indexed destination needs a second
+    # register we'd also have to control, and "rip" (capstone's base for
+    # RIP-relative addressing) isn't settable via a pop gadget the way a
+    # general-purpose register is. None of these are attempted in v1.
+    for i, insn in enumerate(insns):
+        if insn.mnemonic != "mov" or not insn.operands:
+            continue
+        dest, src = insn.operands[0], insn.operands[1] if len(insn.operands) > 1 else None
+        if dest.type != CS_OP_MEM or src is None or src.type != CS_OP_REG:
+            continue
+        if dest.mem.index != 0 or dest.mem.base == 0:
+            continue
+        dest_reg = insn.reg_name(dest.mem.base)
+        if dest_reg == "rip":
+            continue
+        src_reg = insn.reg_name(src.reg)
+        # A gadget can contain instructions before the mov that overwrite
+        # dest_reg/src_reg's value — e.g. "mov eax, 0x48000000 ; mov [rax],
+        # rdx ; ret" clobbers rax right before the write we'd rely on. Skip
+        # any mov whose dest/src was written by an earlier instruction in
+        # this same gadget.
+        if _clobbered_before(insns[:i], dest_reg, src_reg):
+            continue
+        return (dest_reg, src_reg, dest.mem.disp)
+    return None
+
+
+def _clobbered_before(prior_insns, dest_reg: str, src_reg: str) -> bool:
+    target_families = {_reg_family(dest_reg), _reg_family(src_reg)}
+    for insn in prior_insns:
+        _, written = insn.regs_access()
+        if any(_reg_family(insn.reg_name(reg_id)) in target_families for reg_id in written):
             return True
     return False
