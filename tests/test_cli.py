@@ -50,7 +50,15 @@ def test_stage_offset_runs_standalone(capsys, fixture_path):
     assert "Offset to return address: 72 bytes" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("stage", ["chainer", "leak", "exploit"])
+def test_stage_chainer_with_run_builds_and_verifies_shell(capsys, fixture_path):
+    exit_code = main([str(fixture_path("fixture1_none")), "--stage", "chainer", "--run"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Chain (" in out
+    assert "Shell verified" in out
+
+
+@pytest.mark.parametrize("stage", ["leak", "exploit"])
 def test_unimplemented_stage_reports_clearly(capsys, fixture_path, stage):
     exit_code = main([str(fixture_path("fixture1_none")), "--stage", stage])
     assert exit_code == 1

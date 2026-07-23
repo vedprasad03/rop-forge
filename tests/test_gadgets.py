@@ -3,7 +3,7 @@ import pytest
 from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 
 from rop_forge.gadgets import GadgetKind, scan_gadgets
-from rop_forge.gadgets.scanner import _candidate_starts, _classify
+from rop_forge.gadgets.scanner import _build_gadget, _candidate_starts, _classify
 
 
 def test_scan_gadgets_on_tiny_fixture_is_well_formed(fixture_path):
@@ -89,3 +89,39 @@ def _disasm(code: bytes, addr: int = 0x1000):
 )
 def test_classify_known_instruction_sequences(code, expected_kind):
     assert _classify(_disasm(code)) is expected_kind
+
+
+# --- pop_order/mem_write: only populated for ret-terminated gadgets --------
+# The chain builder assumes a gadget's own `ret` consumes the next stack
+# value in sequence. A jmp-reg/call-reg terminated gadget still classifies
+# normally (useful for display) but must expose no structured effect data,
+# since chaining into it would jump wherever that register points instead.
+
+
+def test_build_gadget_pop_order_empty_when_jmp_terminated():
+    gadget = _build_gadget(_disasm(b"\x5f\xff\xe0"))  # pop rdi ; jmp rax
+    assert gadget.kind == GadgetKind.POP_REG
+    assert gadget.pop_order == ()
+
+
+def test_build_gadget_mem_write_none_when_jmp_terminated():
+    gadget = _build_gadget(_disasm(b"\x48\x89\x38\xff\xe0"))  # mov [rax], rdi ; jmp rax
+    assert gadget.kind == GadgetKind.MOV_MEM
+    assert gadget.mem_write is None
+
+
+# --- mem_write: rejected if an earlier instruction clobbers the registers --
+# it relies on (e.g. "mov eax, X ; mov [rax], rdx ; ret" overwrites rax
+# right before the write that would use it).
+
+
+def test_build_gadget_mem_write_none_when_dest_reg_clobbered():
+    # mov eax, 0x48000000 ; mov [rax], rdx ; ret
+    gadget = _build_gadget(_disasm(b"\xb8\x00\x00\x00\x48\x48\x89\x10\xc3"))
+    assert gadget.kind == GadgetKind.MOV_MEM
+    assert gadget.mem_write is None
+
+
+def test_build_gadget_mem_write_present_when_not_clobbered():
+    gadget = _build_gadget(_disasm(b"\x48\x89\x10\xc3"))  # mov [rax], rdx ; ret
+    assert gadget.mem_write == ("rax", "rdx", 0)

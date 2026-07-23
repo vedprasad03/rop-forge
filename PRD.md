@@ -121,9 +121,10 @@ Document this explicitly in `chainer/README.md` with a small diagram — this is
 - Implement the state/goal/search model from §6.3.
 - Get a working chain for fixture 1 (no protections) first: prove you can pop registers and call `execve`.
 - Extend to fixture 2 (NX): forces a ROP chain instead of shellcode injection — this should already work if chain builder is general.
+- Neither fixture has enough usable gadgets on its own (no `pop rdi`/`rsi`/`rdx`/`rax`, no `syscall`) — the chain is necessarily built from a *merged* binary+libc gadget database. Resolving libc's runtime load address for that merge is properly §6.1's `leak/` phase's job; Phase 4 runs the target with ASLR disabled instead, as a documented stand-in (see ENGINEERING_LOG.md) — real leak-based resolution replaces this in Phase 5.
 
 ### Phase 5 — ASLR/PIE bypass (3–4 days)
-- Implement leak primitive + base computation.
+- Implement leak primitive + base computation, replacing Phase 4's ASLR-disabled stand-in for locating libc's runtime base.
 - Extend chain builder to work against fixture 4 (PIE).
 
 ### Phase 6 — Canary bypass (2–3 days, stretch — include if time allows)
