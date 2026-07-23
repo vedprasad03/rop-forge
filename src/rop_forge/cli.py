@@ -5,6 +5,7 @@ import sys
 
 from rop_forge.analyzer import Protections, analyze_protections
 from rop_forge.gadgets import GadgetDatabase, GadgetKind, scan_gadgets
+from rop_forge.offset import OffsetNotFoundError, find_offset
 
 _EXAMPLES_PER_KIND = 5
 
@@ -64,6 +65,12 @@ def _run_gadgets(binary_path: str) -> int:
     return 0
 
 
+def _run_offset(binary_path: str) -> int:
+    offset = find_offset(binary_path)
+    print(f"Offset to return address: {offset} bytes")
+    return 0
+
+
 def _stage_not_yet_implemented(stage: str):
     def _run(binary_path: str) -> int:
         print(f"rop-forge: stage '{stage}' not yet implemented", file=sys.stderr)
@@ -75,7 +82,7 @@ def _stage_not_yet_implemented(stage: str):
 STAGE_RUNNERS = {
     "analyzer": _run_analyzer,
     "gadgets": _run_gadgets,
-    "offset": _stage_not_yet_implemented("offset"),
+    "offset": _run_offset,
     "chainer": _stage_not_yet_implemented("chainer"),
     "leak": _stage_not_yet_implemented("leak"),
     "exploit": _stage_not_yet_implemented("exploit"),
@@ -83,7 +90,7 @@ STAGE_RUNNERS = {
 
 
 def _run_full_pipeline(binary_path: str) -> int:
-    for stage_runner in (_run_analyzer, _run_gadgets):
+    for stage_runner in (_run_analyzer, _run_gadgets, _run_offset):
         exit_code = stage_runner(binary_path)
         if exit_code != 0:
             return exit_code
@@ -101,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     except (FileNotFoundError, IsADirectoryError) as exc:
         print(f"rop-forge: cannot read binary '{args.binary}': {exc}", file=sys.stderr)
         return 2
+    except OffsetNotFoundError as exc:
+        print(f"rop-forge: {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

@@ -17,10 +17,16 @@ def test_main_returns_nonzero_until_pipeline_exists(capsys, fixture_path):
     out = capsys.readouterr().out
     assert "NX:" in out
     assert "Found" in out and "gadgets" in out
+    assert "Offset to return address:" in out
 
 
 def test_main_reports_missing_binary():
     exit_code = main(["fixtures/build/does_not_exist"])
+    assert exit_code == 2
+
+
+def test_main_reports_directory_as_binary(fixture_path):
+    exit_code = main([str(fixture_path("fixture1_none").parent)])
     assert exit_code == 2
 
 
@@ -38,7 +44,13 @@ def test_stage_gadgets_runs_standalone(capsys, fixture_path):
     assert "Found" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("stage", ["offset", "chainer", "leak", "exploit"])
+def test_stage_offset_runs_standalone(capsys, fixture_path):
+    exit_code = main([str(fixture_path("fixture1_none")), "--stage", "offset"])
+    assert exit_code == 0
+    assert "Offset to return address: 72 bytes" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stage", ["chainer", "leak", "exploit"])
 def test_unimplemented_stage_reports_clearly(capsys, fixture_path, stage):
     exit_code = main([str(fixture_path("fixture1_none")), "--stage", stage])
     assert exit_code == 1
