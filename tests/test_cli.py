@@ -58,7 +58,32 @@ def test_stage_chainer_with_run_builds_and_verifies_shell(capsys, fixture_path):
     assert "Shell verified" in out
 
 
-@pytest.mark.parametrize("stage", ["leak", "exploit"])
+def test_stage_leak_runs_standalone(capsys, fixture_path):
+    exit_code = main([str(fixture_path("fixture4_nx_pie_server")), "--stage", "leak"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Offset to return address: 72 bytes" in out
+    assert "Libc runtime base: 0x" in out
+
+
+def test_stage_chainer_with_server_uses_leaked_flow(capsys, fixture_path):
+    exit_code = main(
+        [
+            str(fixture_path("fixture4_nx_pie")),
+            "--server",
+            str(fixture_path("fixture4_nx_pie_server")),
+            "--stage",
+            "chainer",
+            "--run",
+        ]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Chain (" in out
+    assert "Shell verified" in out
+
+
+@pytest.mark.parametrize("stage", ["exploit"])
 def test_unimplemented_stage_reports_clearly(capsys, fixture_path, stage):
     exit_code = main([str(fixture_path("fixture1_none")), "--stage", stage])
     assert exit_code == 1

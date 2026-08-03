@@ -9,7 +9,9 @@
 # override those hardened defaults to get a genuinely unprotected baseline.
 
 CC := gcc
-SRC := src/vuln.c
+VULN_SRC := src/vuln.c
+STANDALONE_SRC := src/standalone_main.c
+SERVER_SRC := src/server_main.c
 BUILD := build
 
 FIXTURES := \
@@ -19,27 +21,37 @@ FIXTURES := \
 	$(BUILD)/fixture4_nx_pie \
 	$(BUILD)/fixture5_nx_pie_canary
 
+# Phase 5's leak needs two interactions against the same address space
+# (vulnerable() only ever calls read() once per process) — this forking
+# server variant of fixture4 provides that; see src/server_main.c. Same
+# protection flags as fixture4_nx_pie itself, just a different harness.
+SERVER_FIXTURES := \
+	$(BUILD)/fixture4_nx_pie_server
+
 .PHONY: all clean
 
-all: $(FIXTURES)
+all: $(FIXTURES) $(SERVER_FIXTURES)
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/fixture1_none: $(SRC) | $(BUILD)
-	$(CC) -no-pie -fno-stack-protector -z execstack -z norelro -o $@ $<
+$(BUILD)/fixture1_none: $(VULN_SRC) $(STANDALONE_SRC) | $(BUILD)
+	$(CC) -no-pie -fno-stack-protector -z execstack -z norelro -o $@ $^
 
-$(BUILD)/fixture2_nx: $(SRC) | $(BUILD)
-	$(CC) -no-pie -fno-stack-protector -z noexecstack -z norelro -o $@ $<
+$(BUILD)/fixture2_nx: $(VULN_SRC) $(STANDALONE_SRC) | $(BUILD)
+	$(CC) -no-pie -fno-stack-protector -z noexecstack -z norelro -o $@ $^
 
-$(BUILD)/fixture3_nx_canary: $(SRC) | $(BUILD)
-	$(CC) -no-pie -fstack-protector-all -z noexecstack -z norelro -o $@ $<
+$(BUILD)/fixture3_nx_canary: $(VULN_SRC) $(STANDALONE_SRC) | $(BUILD)
+	$(CC) -no-pie -fstack-protector-all -z noexecstack -z norelro -o $@ $^
 
-$(BUILD)/fixture4_nx_pie: $(SRC) | $(BUILD)
-	$(CC) -pie -fPIC -fno-stack-protector -z noexecstack -z norelro -o $@ $<
+$(BUILD)/fixture4_nx_pie: $(VULN_SRC) $(STANDALONE_SRC) | $(BUILD)
+	$(CC) -pie -fPIC -fno-stack-protector -z noexecstack -z norelro -o $@ $^
 
-$(BUILD)/fixture5_nx_pie_canary: $(SRC) | $(BUILD)
-	$(CC) -pie -fPIC -fstack-protector-all -z noexecstack -z norelro -o $@ $<
+$(BUILD)/fixture5_nx_pie_canary: $(VULN_SRC) $(STANDALONE_SRC) | $(BUILD)
+	$(CC) -pie -fPIC -fstack-protector-all -z noexecstack -z norelro -o $@ $^
+
+$(BUILD)/fixture4_nx_pie_server: $(VULN_SRC) $(SERVER_SRC) | $(BUILD)
+	$(CC) -pie -fPIC -fno-stack-protector -z noexecstack -z norelro -o $@ $^
 
 clean:
 	rm -rf $(BUILD)
