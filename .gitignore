@@ -1,5 +1,6 @@
 # --- Project-specific (rop-forge) ---
 core
+core.[0-9]*
 *.core
 fixtures/build/
 .chain_cache/

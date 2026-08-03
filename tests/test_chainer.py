@@ -9,6 +9,7 @@ from rop_forge.chainer import (
     build_chain,
     build_execve_chain,
     execve_goal,
+    execve_goal_preexisting_string,
     find_system_libc,
     verify_shell,
 )
@@ -49,6 +50,17 @@ def test_execve_goal_shape():
     goal = execve_goal(0x404000)
     assert goal.register_values == {"rax": 59, "rdi": 0x404000, "rsi": 0, "rdx": 0}
     assert goal.memory_writes == {0x404000: b"/bin/sh\x00"}
+    assert goal.final_gadget_kind is GadgetKind.SYSCALL
+
+
+def test_execve_goal_preexisting_string_shape():
+    # Phase 5's leaked-chain variant: same register goal, but no
+    # memory_writes requirement, since the string is assumed already
+    # resident (e.g. libc's own internal "/bin/sh") rather than needing a
+    # MOV_MEM gadget to plant it.
+    goal = execve_goal_preexisting_string(0x404000)
+    assert goal.register_values == {"rax": 59, "rdi": 0x404000, "rsi": 0, "rdx": 0}
+    assert goal.memory_writes == {}
     assert goal.final_gadget_kind is GadgetKind.SYSCALL
 
 

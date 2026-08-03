@@ -6,10 +6,3 @@ void vulnerable(void) {
     read(0, buf, 256);
     printf("%s\n", buf);
 }
-
-int main(void) {
-    setvbuf(stdout, NULL, _IONBF, 0);
-    setvbuf(stdin, NULL, _IONBF, 0);
-    vulnerable();
-    return 0;
-}

