@@ -108,6 +108,28 @@ def test_stage_chainer_with_server_auto_detects_canary(capsys, fixture_path):
     assert "Shell verified" in out
 
 
+def test_stage_chainer_with_server_handles_pie_and_canary_together(capsys, fixture_path):
+    # fixture5_nx_pie_canary — PRD.md's "hardest tier" — exercised via the
+    # actual CLI entrypoint, not just the underlying library functions
+    # directly (as test_canary.py's own fixture5 test does): confirms the
+    # same --server auto-detection path used above also handles PIE and
+    # canary together, with no extra flags or special-casing needed.
+    exit_code = main(
+        [
+            str(fixture_path("fixture5_nx_pie_canary")),
+            "--server",
+            str(fixture_path("fixture5_nx_pie_canary_server")),
+            "--stage",
+            "chainer",
+            "--run",
+        ]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Chain (" in out
+    assert "Shell verified" in out
+
+
 @pytest.mark.parametrize("stage", ["exploit"])
 def test_unimplemented_stage_reports_clearly(capsys, fixture_path, stage):
     exit_code = main([str(fixture_path("fixture1_none")), "--stage", stage])
