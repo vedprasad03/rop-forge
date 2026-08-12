@@ -24,9 +24,14 @@ FIXTURES := \
 # Phase 5's leak needs two interactions against the same address space
 # (vulnerable() only ever calls read() once per process) — this forking
 # server variant of fixture4 provides that; see src/server_main.c. Same
-# protection flags as fixture4_nx_pie itself, just a different harness.
+# protection flags as the matching non-server fixture, just a different
+# harness. Phase 6's canary brute force needs the same thing: many
+# connections against one long-lived process whose canary secret (chosen
+# once at parent startup) is shared unchanged by every forked child.
 SERVER_FIXTURES := \
-	$(BUILD)/fixture4_nx_pie_server
+	$(BUILD)/fixture3_nx_canary_server \
+	$(BUILD)/fixture4_nx_pie_server \
+	$(BUILD)/fixture5_nx_pie_canary_server
 
 .PHONY: all clean
 
@@ -50,8 +55,14 @@ $(BUILD)/fixture4_nx_pie: $(VULN_SRC) $(STANDALONE_SRC) | $(BUILD)
 $(BUILD)/fixture5_nx_pie_canary: $(VULN_SRC) $(STANDALONE_SRC) | $(BUILD)
 	$(CC) -pie -fPIC -fstack-protector-all -z noexecstack -z norelro -o $@ $^
 
+$(BUILD)/fixture3_nx_canary_server: $(VULN_SRC) $(SERVER_SRC) | $(BUILD)
+	$(CC) -no-pie -fstack-protector-all -z noexecstack -z norelro -o $@ $^
+
 $(BUILD)/fixture4_nx_pie_server: $(VULN_SRC) $(SERVER_SRC) | $(BUILD)
 	$(CC) -pie -fPIC -fno-stack-protector -z noexecstack -z norelro -o $@ $^
+
+$(BUILD)/fixture5_nx_pie_canary_server: $(VULN_SRC) $(SERVER_SRC) | $(BUILD)
+	$(CC) -pie -fPIC -fstack-protector-all -z noexecstack -z norelro -o $@ $^
 
 clean:
 	rm -rf $(BUILD)
