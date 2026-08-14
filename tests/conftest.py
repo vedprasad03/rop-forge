@@ -52,3 +52,32 @@ def execve_chain_fixture1(fixture_path):
     from rop_forge.chainer import build_execve_chain
 
     return build_execve_chain(fixture_path("fixture1_none"))
+
+
+# Building a leaked/canary-cracked chain scans the full libc gadget database
+# (~80s, see ENGINEERING_LOG.md's Phase 2 entry) — session-scoped (and
+# shared here, not duplicated per test file) so every test across
+# test_leak.py/test_canary.py/test_exploit.py that needs a real solved
+# chain shares one build each, instead of repeating that scan per file
+# (the exact per-test-rescan mistake Phase 2 already fixed once, and
+# Phase 5's test_leak.py first draft made again before being caught).
+@pytest.fixture(scope="session")
+def leaked_execve_fixture4(fixture_path, libc_path):
+    from rop_forge.chainer import build_leaked_execve_chain
+    from rop_forge.leak import ForkingServer
+
+    server = ForkingServer(fixture_path("fixture4_nx_pie_server"))
+    result = build_leaked_execve_chain(server, libc_path)
+    yield server, result
+    server.close()
+
+
+@pytest.fixture(scope="session")
+def canary_execve_fixture3(fixture_path, libc_path):
+    from rop_forge.canary import build_canary_execve_chain
+    from rop_forge.leak import ForkingServer
+
+    server = ForkingServer(fixture_path("fixture3_nx_canary_server"))
+    result = build_canary_execve_chain(server, libc_path)
+    yield server, result
+    server.close()

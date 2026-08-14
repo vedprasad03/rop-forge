@@ -16,18 +16,6 @@ def canary_server(fixture_path):
     server.close()
 
 
-# Building a canary-cracked chain scans the full libc gadget database (~80s,
-# see ENGINEERING_LOG.md's Phase 2/5 entries) — session-scoped so every test
-# that needs a real chain shares this one build, instead of repeating that
-# scan per test.
-@pytest.fixture(scope="session")
-def canary_execve_fixture3(fixture_path, libc_path):
-    server = ForkingServer(fixture_path("fixture3_nx_canary_server"))
-    chain, header = build_canary_execve_chain(server, libc_path)
-    yield server, chain, header
-    server.close()
-
-
 # --- crack_canary(): real byte-by-byte brute force against a live server --
 
 
@@ -80,13 +68,13 @@ def test_crack_canary_raises_for_a_target_with_no_canary(fixture_path):
 
 
 def test_canary_execve_chain_ends_in_syscall(canary_execve_fixture3):
-    _server, chain, _header = canary_execve_fixture3
-    assert "syscall" in chain.elements[-1].description
+    _server, result = canary_execve_fixture3
+    assert "syscall" in result.chain.elements[-1].description
 
 
 def test_canary_execve_chain_gets_a_real_shell(canary_execve_fixture3):
-    server, chain, header = canary_execve_fixture3
-    assert verify_canary_shell(server, header, chain)
+    server, result = canary_execve_fixture3
+    assert verify_canary_shell(server, result.header, result.chain)
 
 
 def test_verify_canary_shell_fails_with_a_wrong_canary_byte(canary_execve_fixture3):
@@ -94,10 +82,10 @@ def test_verify_canary_shell_fails_with_a_wrong_canary_byte(canary_execve_fixtur
     # flipping a single bit of the *correct*, already-cracked canary must
     # trip __stack_chk_fail and produce no shell — otherwise a bug in the
     # cracking or header-assembly logic could silently pass by coincidence.
-    server, chain, header = canary_execve_fixture3
-    corrupted = bytearray(header)
+    server, result = canary_execve_fixture3
+    corrupted = bytearray(result.header)
     corrupted[72] ^= 0xFF  # canary's own first byte, per offset=72 above
-    assert not verify_canary_shell(server, bytes(corrupted), chain)
+    assert not verify_canary_shell(server, bytes(corrupted), result.chain)
 
 
 def test_canary_execve_chain_gets_a_real_shell_on_fixture5_pie(fixture_path, libc_path):
@@ -109,7 +97,7 @@ def test_canary_execve_chain_gets_a_real_shell_on_fixture5_pie(fixture_path, lib
     # libc), so adding PIE on top of the canary costs nothing extra here.
     server = ForkingServer(fixture_path("fixture5_nx_pie_canary_server"))
     try:
-        chain, header = build_canary_execve_chain(server, libc_path)
-        assert verify_canary_shell(server, header, chain)
+        result = build_canary_execve_chain(server, libc_path)
+        assert verify_canary_shell(server, result.header, result.chain)
     finally:
         server.close()

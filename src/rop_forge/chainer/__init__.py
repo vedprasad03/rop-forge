@@ -1,5 +1,5 @@
 from .builder import ChainNotFoundError, build_chain
-from .chain import Chain, ChainElement
+from .chain import Chain, ChainElement, SolvedExploit
 from .exploit import (
     build_execve_chain,
     build_leaked_execve_chain,
@@ -15,6 +15,7 @@ __all__ = [
     "ChainNotFoundError",
     "Chain",
     "ChainElement",
+    "SolvedExploit",
     "build_execve_chain",
     "build_leaked_execve_chain",
     "find_system_libc",

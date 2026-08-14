@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from rop_forge.chainer import build_chain, build_leaked_execve_chain, verify_leaked_shell
+from rop_forge.chainer import build_chain, verify_leaked_shell
 from rop_forge.chainer.exploit import _BINSH
 from rop_forge.chainer.goal import execve_goal_preexisting_string
 from rop_forge.gadgets import GadgetDatabase
@@ -16,18 +16,6 @@ from rop_forge.leak.finder import _wait_for_crash_core
 def leak_server(fixture_path):
     server = ForkingServer(fixture_path("fixture4_nx_pie_server"))
     yield server
-    server.close()
-
-
-# Building a leaked chain scans the full libc gadget database (~80s, see
-# ENGINEERING_LOG.md's Phase 2 entry) — session-scoped so every test that
-# needs a real chain shares this one build, instead of repeating that scan
-# per test (the exact per-test-rescan mistake Phase 2 already fixed once).
-@pytest.fixture(scope="session")
-def leaked_execve_fixture4(fixture_path, libc_path):
-    server = ForkingServer(fixture_path("fixture4_nx_pie_server"))
-    chain, offset = build_leaked_execve_chain(server, libc_path)
-    yield server, chain, offset
     server.close()
 
 
@@ -84,13 +72,13 @@ def test_probe_raises_for_a_libc_path_that_does_not_exist(leak_server):
 
 
 def test_leaked_execve_chain_ends_in_syscall(leaked_execve_fixture4):
-    _server, chain, _offset = leaked_execve_fixture4
-    assert "syscall" in chain.elements[-1].description
+    _server, result = leaked_execve_fixture4
+    assert "syscall" in result.chain.elements[-1].description
 
 
 def test_leaked_execve_chain_gets_a_real_shell(leaked_execve_fixture4):
-    server, chain, offset = leaked_execve_fixture4
-    assert verify_leaked_shell(server, chain, offset)
+    server, result = leaked_execve_fixture4
+    assert verify_leaked_shell(server, result.chain, result.offset)
 
 
 def test_verify_leaked_shell_fails_with_a_corrupted_base(leaked_execve_fixture4, libc_path, libc_gadgets):
@@ -100,7 +88,8 @@ def test_verify_leaked_shell_fails_with_a_corrupted_base(leaked_execve_fixture4,
     # happens to hand out the same fixed address on every run (see
     # ENGINEERING_LOG.md) — this is the one test actually sensitive to
     # whether the leaked value is being used correctly, not just present.
-    server, _chain, offset = leaked_execve_fixture4
+    server, solved = leaked_execve_fixture4
+    offset = solved.offset
     result = probe(server, libc_path)
     # XOR a high bit rather than adding a small offset — a small offset can
     # land on still-valid, still-mapped libc code (libc's mapping spans

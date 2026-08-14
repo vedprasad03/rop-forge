@@ -2,7 +2,7 @@
 name = "rop-forge"
 version = "0.1.0"
 description = "Automated ROP-chain exploit generator for 64-bit Linux ELF binaries"
-readme = "PRD.md"
+readme = "README.md"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "Ved Prasad" }]
 dependencies = [
