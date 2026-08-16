@@ -8,8 +8,10 @@ authors = [{ name = "Ved Prasad" }]
 dependencies = [
     "pyelftools>=0.31",
     "capstone>=5.0.1",
-    "pwntools>=4.13.0",
 ]
+
+[project.optional-dependencies]
+live = ["pwntools>=4.13.0"]
 
 [project.scripts]
 rop-forge = "rop_forge.cli:main"

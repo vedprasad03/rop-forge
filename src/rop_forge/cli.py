@@ -1,5 +1,7 @@
 """Command-line entrypoint for rop-forge."""
 
+from __future__ import annotations
+
 import argparse
 import subprocess
 import sys
@@ -8,26 +10,50 @@ import time
 from pathlib import Path
 
 from rop_forge.analyzer import Protections, analyze_protections
-from rop_forge.canary import CanaryNotFoundError, build_canary_execve_chain, crack_canary, verify_canary_shell
-from rop_forge.chainer import (
-    Chain,
-    ChainNotFoundError,
-    build_execve_chain,
-    build_leaked_execve_chain,
-    find_system_libc,
-    verify_leaked_shell,
-    verify_shell,
-)
-from rop_forge.exploit import emit_replay_script, emit_solver_script
 from rop_forge.gadgets import GadgetDatabase, GadgetKind, scan_gadgets
-from rop_forge.leak import ForkingServer, LeakError, probe
-from rop_forge.offset import OffsetNotFoundError, find_offset
+
+# offset/chainer/leak/canary/exploit all transitively need pwntools (the
+# `rop-forge[live]` extra) — analyzer/gadgets are the only stages that work
+# with just the base install. Import lazily so `--stage analyzer`/`--stage
+# gadgets` (and --help) work without it, and give every other stage a clear
+# message instead of a raw ModuleNotFoundError.
+try:
+    from rop_forge.canary import CanaryNotFoundError, build_canary_execve_chain, crack_canary, verify_canary_shell
+    from rop_forge.chainer import (
+        Chain,
+        ChainNotFoundError,
+        build_execve_chain,
+        build_leaked_execve_chain,
+        find_system_libc,
+        verify_leaked_shell,
+        verify_shell,
+    )
+    from rop_forge.exploit import emit_replay_script, emit_solver_script
+    from rop_forge.leak import ForkingServer, LeakError, probe
+    from rop_forge.offset import OffsetNotFoundError, find_offset
+
+    _LIVE_IMPORT_ERROR: ModuleNotFoundError | None = None
+except ModuleNotFoundError as exc:
+    _LIVE_IMPORT_ERROR = exc
+
+    class OffsetNotFoundError(Exception):
+        pass
+
+    class ChainNotFoundError(Exception):
+        pass
+
+    class LeakError(Exception):
+        pass
+
+    class CanaryNotFoundError(Exception):
+        pass
 
 _EXAMPLES_PER_KIND = 5
 _REPLAY_RUN_STARTUP = 3.0  # aslr=False, local process() — fast to reach ready-for-input
 _SOLVER_RUN_STARTUP = 45.0  # includes a fresh canary crack + libc leak inside the subprocess itself
 
 STAGES = ["analyzer", "gadgets", "offset", "chainer", "leak", "canary", "exploit"]
+_LIVE_STAGES = {"offset", "chainer", "leak", "canary", "exploit"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -288,6 +314,20 @@ def _run_full_pipeline(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # the full pipeline includes offset, so it needs live deps too — only
+    # `--stage analyzer`/`--stage gadgets` work on the base install.
+    needs_live = args.stage is None or args.stage in _LIVE_STAGES
+    if needs_live and _LIVE_IMPORT_ERROR is not None:
+        stage_desc = f"--stage {args.stage}" if args.stage else "the full pipeline"
+        print(
+            f"rop-forge: {stage_desc} requires the 'live' extra (missing module "
+            f"'{_LIVE_IMPORT_ERROR.name}') — install with `pip install rop-forge[live]` "
+            "(or `uv sync --extra live` in this repo). "
+            "--stage analyzer/--stage gadgets work without it.",
+            file=sys.stderr,
+        )
+        return 5
 
     runner = STAGE_RUNNERS[args.stage] if args.stage else _run_full_pipeline
     try:
