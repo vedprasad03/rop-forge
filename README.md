@@ -65,10 +65,12 @@ Full library API is the same surface the CLI calls — `rop_forge.analyzer.analy
 
 ## Requirements
 
-Linux x86-64 only — `pwntools.process()` needs to fork/exec real ELF binaries, which is impossible on macOS or Windows regardless of packaging. Developed inside a Linux devcontainer on a macOS/arm64 host (see below); on native Linux, `uv sync` alone is sufficient.
+`pip install rop-forge` alone gets you the static-analysis stages (`--stage analyzer`, `--stage gadgets`) — cross-platform, no live process execution. Everything else (`offset`, `chainer`, `leak`, `canary`, `exploit`, `--run`, and the default full-pipeline invocation) needs `pwntools`, gated behind the `rop-forge[live]` extra, and Linux x86-64 specifically — `pwntools.process()` needs to fork/exec real ELF binaries, which is impossible on macOS or Windows regardless of packaging. Running a live stage without the extra installed prints a clear message rather than a raw import error.
+
+Developed inside a Linux devcontainer on a macOS/arm64 host (see below); on native Linux, `uv sync --extra live` alone is sufficient.
 
 ```bash
-uv sync
+uv sync --extra live
 uv run pytest        # ~115 tests, real fixtures, real crashes, real shells
 uv run rop-forge <binary> [--stage X] [--run]
 ```

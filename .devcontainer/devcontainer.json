@@ -4,7 +4,7 @@
         "dockerfile": "Dockerfile"
     },
     "workspaceFolder": "/workspace",
-    "postCreateCommand": "uv sync",
+    "postCreateCommand": "uv sync --extra live",
     "customizations": {
         "vscode": {
             "extensions": [

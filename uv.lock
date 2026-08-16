@@ -577,8 +577,12 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "capstone" },
-    { name = "pwntools" },
     { name = "pyelftools" },
+]
+
+[package.optional-dependencies]
+live = [
+    { name = "pwntools" },
 ]
 
 [package.dev-dependencies]
@@ -589,9 +593,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "capstone", specifier = ">=5.0.1" },
-    { name = "pwntools", specifier = ">=4.13.0" },
+    { name = "pwntools", marker = "extra == 'live'", specifier = ">=4.13.0" },
     { name = "pyelftools", specifier = ">=0.31" },
 ]
+provides-extras = ["live"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0.0" }]
