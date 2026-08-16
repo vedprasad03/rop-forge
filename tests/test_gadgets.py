@@ -27,6 +27,9 @@ def test_scan_gadgets_kind_invariants_hold_on_libc(libc_gadgets):
     for gadget in libc_gadgets.by_kind(GadgetKind.MOV_MEM):
         assert any("mov" in insn and "ptr" in insn and "[" in insn for insn in gadget.instructions)
 
+    for gadget in libc_gadgets.by_kind(GadgetKind.ZERO_REG):
+        assert any(insn.split()[0] in ("xor", "sub") for insn in gadget.instructions)
+
 
 def test_scan_gadgets_finds_a_large_and_diverse_set_in_libc(libc_gadgets):
     assert len(libc_gadgets) > 1000
@@ -83,9 +86,14 @@ def _disasm(code: bytes, addr: int = 0x1000):
         (b"\x48\x83\xc4\x08\xc3", GadgetKind.STACK_PIVOT),  # add rsp, 8 ; ret
         (b"\x5c\xc3", GadgetKind.STACK_PIVOT),  # pop rsp ; ret — priority over POP_REG
         (b"\x48\x89\x38\xc3", GadgetKind.MOV_MEM),  # mov [rax], rdi ; ret
+        (b"\x31\xd2\xc3", GadgetKind.ZERO_REG),  # xor edx, edx ; ret
+        (b"\x30\xd2\xc3", GadgetKind.OTHER),  # xor dl, dl ; ret — 8-bit doesn't zero-extend
         (b"\x90\xc3", GadgetKind.OTHER),  # nop ; ret
     ],
-    ids=["pop_reg", "syscall", "leave", "add_rsp", "pop_rsp_priority", "mov_mem", "other"],
+    ids=[
+        "pop_reg", "syscall", "leave", "add_rsp", "pop_rsp_priority", "mov_mem",
+        "zero_reg", "zero_reg_8bit_excluded", "other",
+    ],
 )
 def test_classify_known_instruction_sequences(code, expected_kind):
     assert _classify(_disasm(code)) is expected_kind
@@ -125,3 +133,26 @@ def test_build_gadget_mem_write_none_when_dest_reg_clobbered():
 def test_build_gadget_mem_write_present_when_not_clobbered():
     gadget = _build_gadget(_disasm(b"\x48\x89\x10\xc3"))  # mov [rax], rdx ; ret
     assert gadget.mem_write == ("rax", "rdx", 0)
+
+
+# --- zeroed_reg: 32-bit form zero-extends to the full 64-bit family name ---
+# ("xor edx, edx" sets the full rdx, not just its low 32 bits — a real
+# discovery: some real-world libc builds have no POP_REG path to a given
+# register at all, single- or multi-pop, only this. See ENGINEERING_LOG.md.)
+
+
+def test_build_gadget_zeroed_reg_normalizes_to_64bit_family():
+    gadget = _build_gadget(_disasm(b"\x31\xd2\xc3"))  # xor edx, edx ; ret
+    assert gadget.kind == GadgetKind.ZERO_REG
+    assert gadget.zeroed_reg == "rdx"
+    assert gadget.zero_clobbers == frozenset()
+
+
+def test_build_gadget_zeroed_reg_reports_later_clobbers():
+    # xor edx, edx ; mov eax, edx ; ret — also sets rax as a side effect,
+    # which the chain builder needs to know about (see builder.py's
+    # _find_zero_gadgets/state.py's with_registers `clears`).
+    gadget = _build_gadget(_disasm(b"\x31\xd2\x89\xd0\xc3"))
+    assert gadget.kind == GadgetKind.ZERO_REG
+    assert gadget.zeroed_reg == "rdx"
+    assert gadget.zero_clobbers == frozenset({"rax"})

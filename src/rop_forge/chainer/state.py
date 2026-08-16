@@ -22,8 +22,14 @@ class ChainState:
     def initial() -> "ChainState":
         return ChainState(registers=frozenset(), written=frozenset())
 
-    def with_registers(self, updates: dict) -> "ChainState":
+    def with_registers(self, updates: dict, clears: frozenset = frozenset()) -> "ChainState":
+        # `clears` invalidates registers a gadget's own side effects
+        # clobber (see gadgets.Gadget.zero_clobbers) — a previously-tracked
+        # value there is no longer trustworthy once this gadget runs, even
+        # though nothing in `updates` explicitly overwrites it.
         merged = dict(self.registers)
+        for reg in clears:
+            merged.pop(reg, None)
         merged.update(updates)
         return ChainState(registers=frozenset(merged.items()), written=self.written)
 

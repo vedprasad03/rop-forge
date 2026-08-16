@@ -59,9 +59,17 @@ def build_chain(gadgets: GadgetDatabase, goal: Goal, max_depth: int = _DEFAULT_M
         (g for g in gadgets.by_kind(GadgetKind.POP_REG) if g.pop_order),
         key=lambda g: g.pop_order,
     )
+    # One representative per register the goal needs set to exactly 0 — a
+    # zero-reg gadget (bare `xor reg, reg ; ret`) can only ever contribute
+    # the value 0, so it's only ever useful there. Exists specifically
+    # because some registers (e.g. execve's envp=NULL, i.e. rdx=0) may have
+    # no POP_REG gadget at all on a given target's libc, single- or
+    # multi-register — confirmed empirically against Ubuntu 24.04's libc,
+    # see ENGINEERING_LOG.md.
+    zero_gadgets = _find_zero_gadgets(gadgets, goal)
 
     if not goal.memory_writes:
-        return _search(pop_gadgets_all, [], goal, final_gadget, max_depth)
+        return _search(pop_gadgets_all, [], zero_gadgets, goal, final_gadget, max_depth)
 
     mem_candidates = _rank_mem_gadgets(gadgets, goal)[:_MAX_MEM_GADGET_CANDIDATES]
     if not mem_candidates:
@@ -70,7 +78,7 @@ def build_chain(gadgets: GadgetDatabase, goal: Goal, max_depth: int = _DEFAULT_M
     last_error = None
     for mem_gadget in mem_candidates:
         try:
-            return _search(pop_gadgets_all, [mem_gadget], goal, final_gadget, max_depth)
+            return _search(pop_gadgets_all, [mem_gadget], zero_gadgets, goal, final_gadget, max_depth)
         except ChainNotFoundError as exc:
             last_error = exc
     raise ChainNotFoundError(
@@ -79,7 +87,9 @@ def build_chain(gadgets: GadgetDatabase, goal: Goal, max_depth: int = _DEFAULT_M
     )
 
 
-def _search(pop_gadgets_all, mem_gadgets, goal: Goal, final_gadget: Gadget, max_depth: int) -> Chain:
+def _search(
+    pop_gadgets_all, mem_gadgets, zero_gadgets: dict, goal: Goal, final_gadget: Gadget, max_depth: int
+) -> Chain:
     candidate_values = _compute_candidate_values(goal, mem_gadgets)
     relevant = set(candidate_values)
     pop_gadgets = [g for g in pop_gadgets_all if set(g.pop_order) & relevant]
@@ -109,6 +119,18 @@ def _search(pop_gadgets_all, mem_gadgets, goal: Goal, final_gadget: Gadget, max_
         for gadget in mem_gadgets:
             new_state = _apply_mem_write(state, gadget, goal)
             if new_state is None or new_state in visited:
+                continue
+            new_path = path + [(gadget, {})]
+            if goal.is_satisfied(new_state):
+                return _finalize(new_path, final_gadget)
+            visited.add(new_state)
+            frontier.append((new_state, new_path))
+
+        for gadget in zero_gadgets.values():
+            if state.get(gadget.zeroed_reg) == 0:
+                continue  # already satisfied, don't explore a no-op
+            new_state = state.with_registers({gadget.zeroed_reg: 0}, clears=gadget.zero_clobbers)
+            if new_state in visited:
                 continue
             new_path = path + [(gadget, {})]
             if goal.is_satisfied(new_state):
@@ -151,6 +173,22 @@ def _rank_mem_gadgets(gadgets: GadgetDatabase, goal: Goal) -> list:
         return int(dest_reg in goal_regs) + int(src_reg in goal_regs)
 
     return sorted(deduped, key=overlap_score, reverse=True)
+
+
+def _find_zero_gadgets(gadgets: GadgetDatabase, goal: Goal) -> dict:
+    wanted = {reg for reg, value in goal.register_values.items() if value == 0}
+    if not wanted:
+        return {}
+    candidates = [g for g in gadgets.by_kind(GadgetKind.ZERO_REG) if g.zeroed_reg in wanted]
+    # Fewest clobbers first — a bare `xor reg, reg ; ret` (no clobbers) is
+    # strictly safer than one that also stomps other registers, so prefer
+    # it whenever one exists; only fall back to a clobbering gadget for a
+    # register that has no bare option at all.
+    candidates.sort(key=lambda g: len(g.zero_clobbers))
+    found = {}
+    for g in candidates:
+        found.setdefault(g.zeroed_reg, g)
+    return found
 
 
 def _compute_candidate_values(goal: Goal, mem_gadgets: list) -> dict:
