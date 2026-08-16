@@ -1,7 +1,6 @@
 import pytest
 
 from rop_forge.offset import OffsetNotFoundError, find_offset
-from rop_forge.offset import finder as finder_module
 from rop_forge.offset.finder import _get_crash_rip
 
 # Canary-protected fixtures (3, 5) aren't in scope for Phase 3 — a raw
@@ -28,17 +27,6 @@ def test_find_offset_raises_when_pattern_too_short_to_crash(fixture_path):
     # rbp/return address — the target just reads them and exits normally.
     with pytest.raises(OffsetNotFoundError, match="did not crash"):
         find_offset(fixture_path("fixture1_none"), pattern_length=10)
-
-
-def test_crash_and_find_offset_raises_when_address_not_in_pattern(fixture_path, monkeypatch):
-    # Forces the "crashed, but the address isn't in our cyclic pattern"
-    # branch — impractical to construct for real against an actual binary,
-    # since a genuine crash from our own payload is always findable by
-    # construction. A real crash still happens here; only the lookup result
-    # is faked.
-    monkeypatch.setattr(finder_module, "cyclic_find", lambda *_a, **_kw: -1)
-    with pytest.raises(OffsetNotFoundError, match="not found in cyclic pattern"):
-        finder_module._crash_and_find_offset(str(fixture_path("fixture1_none")), 200)
 
 
 class _FakeIO:

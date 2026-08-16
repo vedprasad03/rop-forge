@@ -2,10 +2,14 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from pwn import ELF, context, cyclic, cyclic_find, p64, process
+from pwn import ELF, context, p64, process
 
 _DEFAULT_PATTERN_LENGTH = 512
-_MARKER = 0x4141414141414141
+# Canonical (top bytes zero) AND well below Linux's default mmap_min_addr,
+# so this is guaranteed unmapped — a clean, reproducible page fault rather
+# than a general-protection fault. See _crash_and_find_offset()'s docstring
+# for why that distinction is the whole point.
+_MARKER = 0x1337
 _MAX_CRASH_ATTEMPTS = 3
 
 
@@ -24,16 +28,53 @@ def find_offset(binary_path: str | Path, pattern_length: int = _DEFAULT_PATTERN_
 
 
 def _crash_and_find_offset(binary_path: str, pattern_length: int) -> int:
-    rip = _crash_and_get_rip(binary_path, cyclic(pattern_length))
-    # cyclic_find() hangs/misbehaves when given a raw int for an 8-byte
-    # value — pass the packed bytes instead, which is fast and correct.
-    offset = cyclic_find(p64(rip))
-    if offset == -1:
+    """Binary-searches for the offset using crash-vs-no-crash, not by
+    reading *what* the crash's RIP is.
+
+    Reading RIP after smashing the return address with a raw filler
+    pattern (the original approach, `cyclic()` + `cyclic_find()`) only
+    works because QEMU user-mode emulation doesn't faithfully reproduce
+    real x86-64 fault semantics. `cyclic()`'s alphabet is lowercase ASCII,
+    so any 8-byte window read as an address has a non-zero high byte —
+    essentially never a canonical address. On real hardware, a `ret` to a
+    non-canonical address raises a general-protection fault *before* RIP
+    is ever updated (the crash's saved RIP stays at the `ret` instruction
+    itself — confirmed against a real x86-64 GitHub Actions runner via
+    strace + objdump, see ENGINEERING_LOG.md), not at the garbage value —
+    QEMU instead reports RIP as the garbage value directly. Crash-vs-no-
+    crash doesn't care what kind of fault occurred, so it's portable to
+    both; `_verify_offset()` below still reads RIP, but only after
+    confirming the offset via this search, using a marker chosen to
+    guarantee a real page fault instead (see _MARKER).
+    """
+    if not _crashes(binary_path, pattern_length):
         raise OffsetNotFoundError(
-            f"{binary_path}: crash address 0x{rip:x} not found in cyclic pattern "
-            f"(pattern_length={pattern_length} may be too short to reach the return address)"
+            f"{binary_path} did not crash within {pattern_length} bytes "
+            "(pattern_length may be too short to reach the return address)"
         )
-    return offset
+    lo, hi = 0, pattern_length
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if _crashes(binary_path, mid):
+            hi = mid
+        else:
+            lo = mid
+    return lo
+
+
+def _crashes(binary_path: str, n: int) -> bool:
+    """True if `n` filler bytes make the target die via signal — n bytes
+    short of the return address, it returns normally instead."""
+    cwd = Path(tempfile.mkdtemp(prefix="rop-forge-offset-"))
+    try:
+        io = process(binary_path, cwd=str(cwd))
+        io.send(b"A" * n)
+        io.wait()
+        status = io.poll()
+        io.close()
+        return status is not None and status < 0
+    finally:
+        shutil.rmtree(cwd, ignore_errors=True)
 
 
 def _verify_offset(binary_path: str, offset: int) -> None:
