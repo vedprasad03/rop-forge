@@ -91,13 +91,18 @@ def _crash_and_get_rip(binary_path: str, payload: bytes) -> int:
     # across the whole test suite writes its corefile into the same shared
     # directory (this container's core_pattern has no %p), and under
     # repeated rapid crashes a *different* crash can overwrite it before we
-    # read it. Under QEMU that mostly surfaced as an AttributeError (the
-    # host's own ARM64 qemu-x86_64 core instead of our x86-64 guest's,
-    # caught by the retry below); on genuinely fast native hardware it can
-    # just as easily hand back a *different x86-64 crash's* stale-but-valid
-    # core, silently — cwd isolation removes the shared-file race itself
-    # rather than only catching one of its symptoms (leak/server.py's
-    # ForkingServer already does this for the same reason).
+    # read it (leak/server.py's ForkingServer already does this for the
+    # same reason).
+    #
+    # This is now only ever called by _verify_offset(), confirming an
+    # already-determined offset with a controlled payload that should
+    # deterministically crash — so *any* unexpected outcome here (didn't
+    # crash, corefile unreadable, wrong architecture) is retried rather
+    # than assumed to be a genuine offset error, the same way the binary
+    # search's own crash-detection would be. A truly wrong offset would
+    # fail identically on every attempt anyway; a transient spawn/IO hiccup
+    # (observed rarely, in a full-suite run with thousands of process
+    # spawns) won't.
     last_error = None
     for _ in range(_MAX_CRASH_ATTEMPTS):
         cwd = Path(tempfile.mkdtemp(prefix="rop-forge-offset-"))
@@ -109,18 +114,14 @@ def _crash_and_get_rip(binary_path: str, payload: bytes) -> int:
                 rip = _get_crash_rip(io, binary_path)
                 io.close()
                 return rip
-            except OffsetNotFoundError:
-                io.close()
-                raise
             except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
                 io.close()
                 last_error = exc
         finally:
             shutil.rmtree(cwd, ignore_errors=True)
     raise OffsetNotFoundError(
-        f"{binary_path}: could not reliably read a crash corefile after "
-        f"{_MAX_CRASH_ATTEMPTS} attempts (likely a QEMU corefile-naming race); "
-        f"last error: {last_error}"
+        f"{binary_path}: could not reliably reproduce a controlled crash after "
+        f"{_MAX_CRASH_ATTEMPTS} attempts; last error: {last_error}"
     )
 
 

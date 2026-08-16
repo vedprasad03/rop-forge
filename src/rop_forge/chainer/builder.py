@@ -8,7 +8,15 @@ from .goal import Goal
 from .state import ChainState
 
 _DEFAULT_MAX_DEPTH = 8
-_MAX_MEM_GADGET_CANDIDATES = 5
+# Bumped from the original 5 (see ENGINEERING_LOG.md's Phase 4 entry,
+# "Known limitation: the top-5 memory-write candidate cap") after a real
+# target's top-ranked candidates all failed for the first time — a
+# different glibc build (Ubuntu 24.04 vs. this project's Debian
+# devcontainer) has a genuinely different gadget landscape. Each
+# candidate's own search is fast (~0.5s per Phase 4), so trying more of
+# them is cheap; this was always the documented first move if the
+# original cap ever became a real problem, not a new decision.
+_MAX_MEM_GADGET_CANDIDATES = 20
 
 _FULL_64BIT_REGS = {
     "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",

