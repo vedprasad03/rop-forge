@@ -23,6 +23,26 @@ jobs:
       - name: Sync dependencies (including the live extra)
         run: uv sync --extra live
 
+      - name: "DIAGNOSTIC (temporary, to be removed): strace a single crash"
+        run: |
+          sudo apt-get install -y -qq strace
+          sudo sysctl -w kernel.core_pattern=core
+          ulimit -c unlimited
+          cat > /tmp/diag.py << 'EOF'
+          from pwn import context, cyclic, process
+          context.log_level = "error"
+          payload = cyclic(512)
+          print(f"payload length: {len(payload)}", flush=True)
+          io = process("fixtures/build/fixture1_none")
+          io.send(payload)
+          io.wait()
+          print(f"exit status: {io.poll()}", flush=True)
+          EOF
+          strace -f -tt -e trace=execve,read,write -s 40 -o /tmp/strace.log \
+            uv run python3 /tmp/diag.py || true
+          echo "=== strace log ==="
+          cat /tmp/strace.log
+
       - name: Run test suite
         run: |
           sudo sysctl -w kernel.core_pattern=core
