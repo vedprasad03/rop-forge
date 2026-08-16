@@ -1,3 +1,5 @@
+import shutil
+import tempfile
 from pathlib import Path
 
 from pwn import ELF, context, cyclic, cyclic_find, p64, process
@@ -12,7 +14,7 @@ class OffsetNotFoundError(Exception):
 
 
 def find_offset(binary_path: str | Path, pattern_length: int = _DEFAULT_PATTERN_LENGTH) -> int:
-    binary_path = str(binary_path)
+    binary_path = str(Path(binary_path).resolve())
     context.log_level = "error"
     context.binary = ELF(binary_path)
 
@@ -44,30 +46,36 @@ def _verify_offset(binary_path: str, offset: int) -> None:
 
 
 def _crash_and_get_rip(binary_path: str, payload: bytes) -> int:
-    # Under repeated rapid crashes, the plain "core" filename (this
-    # container's core_pattern has no %p) can occasionally get overwritten
-    # by a *different* crash before we read it, handing pwntools the host's
-    # own ARM64 qemu-x86_64 core instead of our x86-64 guest's — which
-    # raises AttributeError when reading amd64-specific registers off an
-    # aarch64 register struct. That's an environment race, not a legitimate
-    # outcome, so it's retried; genuine OffsetNotFoundError outcomes (didn't
-    # crash, no corefile) are not, since retrying those is deterministic
-    # and just wastes time.
+    # Own isolated cwd per attempt — without this, every process() spawn
+    # across the whole test suite writes its corefile into the same shared
+    # directory (this container's core_pattern has no %p), and under
+    # repeated rapid crashes a *different* crash can overwrite it before we
+    # read it. Under QEMU that mostly surfaced as an AttributeError (the
+    # host's own ARM64 qemu-x86_64 core instead of our x86-64 guest's,
+    # caught by the retry below); on genuinely fast native hardware it can
+    # just as easily hand back a *different x86-64 crash's* stale-but-valid
+    # core, silently — cwd isolation removes the shared-file race itself
+    # rather than only catching one of its symptoms (leak/server.py's
+    # ForkingServer already does this for the same reason).
     last_error = None
     for _ in range(_MAX_CRASH_ATTEMPTS):
-        io = process(binary_path)
-        io.send(payload)
-        io.wait()
+        cwd = Path(tempfile.mkdtemp(prefix="rop-forge-offset-"))
         try:
-            rip = _get_crash_rip(io, binary_path)
-            io.close()
-            return rip
-        except OffsetNotFoundError:
-            io.close()
-            raise
-        except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
-            io.close()
-            last_error = exc
+            io = process(binary_path, cwd=str(cwd))
+            io.send(payload)
+            io.wait()
+            try:
+                rip = _get_crash_rip(io, binary_path)
+                io.close()
+                return rip
+            except OffsetNotFoundError:
+                io.close()
+                raise
+            except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
+                io.close()
+                last_error = exc
+        finally:
+            shutil.rmtree(cwd, ignore_errors=True)
     raise OffsetNotFoundError(
         f"{binary_path}: could not reliably read a crash corefile after "
         f"{_MAX_CRASH_ATTEMPTS} attempts (likely a QEMU corefile-naming race); "
