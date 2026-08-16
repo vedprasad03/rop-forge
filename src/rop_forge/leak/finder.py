@@ -12,6 +12,7 @@ _HEADER_MATCH_LEN = 64
 _CRASH_PATTERN_LENGTH = 512
 _CORE_WAIT_TIMEOUT = 5.0
 _CORE_POLL_INTERVAL = 0.1
+_TARGET_ARCH = "amd64"  # this project only ever targets 64-bit Linux x86-64
 
 
 class LeakError(Exception):
@@ -72,23 +73,50 @@ def probe(server: ForkingServer, libc_path: str | Path, prefix: bytes = b"") -> 
 
 
 def _wait_for_crash_core(server: ForkingServer) -> Corefile:
-    # QEMU writes this file itself (independent of any pwntools process
-    # tracking) whenever the emulated guest crashes — named uniquely per
-    # crash (embeds the guest's own PID + timestamp), unlike the plain
-    # "core" file this container's native core_pattern also produces (that
-    # one is the *qemu interpreter's own* host-arch dump, irrelevant here,
-    # cleaned up defensively below). Each ForkingServer has its own temp
-    # cwd, so there's no risk of an unrelated run's corefile matching.
+    """Locates the target's own crash corefile, whether this process is
+    running under QEMU user-mode emulation or natively.
+
+    Under QEMU (e.g. this project's devcontainer), a guest crash produces
+    *two* core files: `qemu_<basename>_*.core`, written by QEMU itself with
+    the guest's real x86-64 state, and a plain `core` file, which is the
+    *qemu-x86_64 interpreter's own* host-architecture (e.g. aarch64) dump —
+    irrelevant here. Running natively (e.g. a native x86-64 CI runner),
+    there's no QEMU involved at all: the target crashes directly and the
+    OS writes a single, directly-usable `core` file, and no `qemu_*` file
+    ever appears.
+
+    Rather than assume one environment or the other, every candidate that
+    shows up gets parsed and checked by its own ELF architecture — the
+    interpreter's host-arch dump gets discarded regardless of which glob
+    it matched, so this works unmodified in either environment. Each
+    ForkingServer has its own temp cwd, so there's no risk of an unrelated
+    run's corefile matching.
+    """
     basename = Path(server.binary_path).name
-    pattern = str(server.cwd / f"qemu_{basename}_*.core")
+    qemu_pattern = str(server.cwd / f"qemu_{basename}_*.core")
+    plain_core_path = server.cwd / "core"
     deadline = time.monotonic() + _CORE_WAIT_TIMEOUT
     while time.monotonic() < deadline:
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            core_path = Path(matches[-1])
-            core = Corefile(str(core_path))
+        candidates = sorted(glob.glob(qemu_pattern))
+        if plain_core_path.exists():
+            candidates.append(str(plain_core_path))
+        for candidate in candidates:
+            core_path = Path(candidate)
+            try:
+                core = Corefile(str(core_path))
+            except Exception:
+                # most likely caught mid-write (the file exists but isn't
+                # fully flushed yet) — leave it for the next poll rather
+                # than deleting a corefile that hasn't finished landing.
+                continue
+            if core.arch != _TARGET_ARCH:
+                core.file.close()
+                core_path.unlink(missing_ok=True)
+                continue
             core_path.unlink(missing_ok=True)
-            (server.cwd / "core").unlink(missing_ok=True)
+            for stray in glob.glob(qemu_pattern):
+                Path(stray).unlink(missing_ok=True)
+            plain_core_path.unlink(missing_ok=True)
             return core
         time.sleep(_CORE_POLL_INTERVAL)
     raise LeakError(f"target crashed but no core dump appeared within {_CORE_WAIT_TIMEOUT}s")
