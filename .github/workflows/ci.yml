@@ -28,6 +28,7 @@ jobs:
           sudo apt-get install -y -qq strace
           sudo sysctl -w kernel.core_pattern=core
           ulimit -c unlimited
+          make -C fixtures
           cat > /tmp/diag.py << 'EOF'
           from pwn import context, cyclic, process
           context.log_level = "error"
@@ -38,10 +39,14 @@ jobs:
           io.wait()
           print(f"exit status: {io.poll()}", flush=True)
           EOF
-          strace -f -tt -e trace=execve,read,write -s 40 -o /tmp/strace.log \
-            uv run python3 /tmp/diag.py || true
-          echo "=== strace log ==="
-          cat /tmp/strace.log
+          strace -f -tt -e trace=execve,read,write -s 300 -o /tmp/strace.log \
+            .venv/bin/python3 /tmp/diag.py || true
+          echo "=== diag.py output ==="
+          echo "(see stdout above/below this block)"
+          target_pid=$(grep "fixture1_none" /tmp/strace.log | grep execve | awk '{print $1}' | head -1)
+          echo "=== target pid: $target_pid ==="
+          echo "=== target process's own syscalls only ==="
+          grep "^$target_pid " /tmp/strace.log
 
       - name: Run test suite
         run: |
