@@ -181,6 +181,17 @@ def _find_zero_reg_effect(insns) -> tuple[str, frozenset] | None:
     # matter what was there before — so unlike mem_write's dest/src
     # clobber check, there's nothing to verify about instructions
     # *before* it, only what happens after.
+    #
+    # Reject the whole gadget outright if ANY instruction writes to
+    # memory (e.g. "add byte ptr [rdi], cl ; ... ; xor edx, edx ; ...
+    # ; ret") — found for real: a candidate exactly like that corrupted
+    # libc's own embedded "/bin/sh" string when rdi happened to already
+    # point there, because this model only reasons about register
+    # effects. A memory write's target/effect isn't something a plain
+    # register-clobber check can account for, so treat any gadget that
+    # has one as unsafe rather than trying to reason about it.
+    if any(insn.operands and insn.operands[0].type == CS_OP_MEM for insn in insns):
+        return None
     for i, insn in enumerate(insns):
         if insn.mnemonic not in ("xor", "sub") or len(insn.operands) != 2:
             continue
