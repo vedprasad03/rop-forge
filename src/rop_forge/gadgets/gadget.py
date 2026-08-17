@@ -5,6 +5,7 @@ from enum import Enum
 class GadgetKind(Enum):
     POP_REG = "pop_reg"
     MOV_MEM = "mov_mem"
+    ZERO_REG = "zero_reg"
     SYSCALL = "syscall"
     STACK_PIVOT = "stack_pivot"
     OTHER = "other"
@@ -22,6 +23,12 @@ class Gadget:
     # write value isn't attacker-controllable).
     pop_order: tuple[str, ...] = ()  # POP_REG: registers popped, in order
     mem_write: tuple[str, str, int] | None = None  # MOV_MEM: (dest_reg, src_reg, disp)
+    zeroed_reg: str | None = None  # ZERO_REG: the single register set to 0
+    # ZERO_REG: other registers this gadget's own instructions write to
+    # after the zeroing one — e.g. "xor edx, edx ; mov eax, edx ; ret" also
+    # sets rax, so using this gadget invalidates any previously-tracked
+    # rax rather than silently keeping a value the gadget just overwrote.
+    zero_clobbers: frozenset = frozenset()
 
     @property
     def text(self) -> str:

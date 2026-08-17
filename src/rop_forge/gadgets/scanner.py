@@ -131,12 +131,16 @@ def _is_diverting(insn) -> bool:
 def _build_gadget(insns) -> Gadget:
     texts = tuple(f"{insn.mnemonic} {insn.op_str}".strip() for insn in insns)
     kind = _classify(insns)
-    # pop_order/mem_write feed the chain builder, which assumes a gadget's
-    # own `ret` consumes the next stack value in sequence — a jmp-reg/
-    # call-reg terminated gadget doesn't do that (it jumps to whatever that
-    # register holds instead), so it's still classified normally for
-    # display but exposes no structured effect data to build on.
+    # pop_order/mem_write/zeroed_reg feed the chain builder, which assumes a
+    # gadget's own `ret` consumes the next stack value in sequence — a
+    # jmp-reg/call-reg terminated gadget doesn't do that (it jumps to
+    # whatever that register holds instead), so it's still classified
+    # normally for display but exposes no structured effect data to build
+    # on.
     ret_terminated = _is_ret_terminated(insns)
+    zero_effect = (
+        _find_zero_reg_effect(insns) if kind == GadgetKind.ZERO_REG and ret_terminated else None
+    )
     return Gadget(
         address=insns[0].address,
         instructions=texts,
@@ -145,6 +149,8 @@ def _build_gadget(insns) -> Gadget:
         mem_write=(
             _extract_mem_write(insns) if kind == GadgetKind.MOV_MEM and ret_terminated else None
         ),
+        zeroed_reg=zero_effect[0] if zero_effect else None,
+        zero_clobbers=zero_effect[1] if zero_effect else frozenset(),
     )
 
 
@@ -156,9 +162,58 @@ def _classify(insns) -> GadgetKind:
         return GadgetKind.STACK_PIVOT
     if len(mnemonics) > 1 and all(m == "pop" for m in mnemonics[:-1]):
         return GadgetKind.POP_REG
+    if _find_zero_reg_effect(insns) is not None:
+        return GadgetKind.ZERO_REG
     if _has_mem_write(insns):
         return GadgetKind.MOV_MEM
     return GadgetKind.OTHER
+
+
+def _find_zero_reg_effect(insns) -> tuple[str, frozenset] | None:
+    # Finds the first `xor reg, reg` / `sub reg, reg` — 32-bit (edx) or
+    # 64-bit (rdx) only, since those zero-extend the full register on
+    # x86-64; an 8/16-bit form (dl, dx) only touches its own sub-register —
+    # and reports which OTHER registers this gadget's own later
+    # instructions write to, so the chain builder can invalidate any
+    # previously-tracked value there rather than assume it survives (e.g.
+    # "xor edx, edx ; mov eax, edx ; ret" also sets rax). The zeroing
+    # instruction itself never depends on prior state — self-xor is 0 no
+    # matter what was there before — so unlike mem_write's dest/src
+    # clobber check, there's nothing to verify about instructions
+    # *before* it, only what happens after.
+    #
+    # Reject the whole gadget outright if ANY instruction writes to
+    # memory (e.g. "add byte ptr [rdi], cl ; ... ; xor edx, edx ; ...
+    # ; ret") — found for real: a candidate exactly like that corrupted
+    # libc's own embedded "/bin/sh" string when rdi happened to already
+    # point there, because this model only reasons about register
+    # effects. A memory write's target/effect isn't something a plain
+    # register-clobber check can account for, so treat any gadget that
+    # has one as unsafe rather than trying to reason about it.
+    if any(insn.operands and insn.operands[0].type == CS_OP_MEM for insn in insns):
+        return None
+    for i, insn in enumerate(insns):
+        if insn.mnemonic not in ("xor", "sub") or len(insn.operands) != 2:
+            continue
+        dest, src = insn.operands
+        if dest.type != CS_OP_REG or src.type != CS_OP_REG or dest.reg != src.reg:
+            continue
+        if dest.size not in (4, 8):
+            continue
+        zeroed = _reg_family(insn.reg_name(dest.reg))
+        clobbers = set()
+        for later in insns[i + 1 :]:
+            _, written = later.regs_access()
+            for reg_id in written:
+                family = _reg_family(later.reg_name(reg_id))
+                # rsp/rip are never a goal target or tracked chain-state
+                # register in this model — ret's own implicit stack-pointer
+                # write would otherwise pollute every single gadget's
+                # clobber set with meaningless noise.
+                if family not in (zeroed, "rsp", "rip"):
+                    clobbers.add(family)
+        return zeroed, frozenset(clobbers)
+    return None
 
 
 def _is_stack_pivot(insns) -> bool:

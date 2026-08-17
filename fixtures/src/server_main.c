@@ -45,7 +45,12 @@ int main(void) {
     printf("PORT %d\n", ntohs(addr.sin_port));
     fflush(stdout);
 
-    if (listen(listen_fd, 16) < 0) {
+    // Canary-cracking fires ~2000 connections in quick succession; a small
+    // backlog that was never a problem under this project's QEMU
+    // devcontainer (slower, naturally paced) can genuinely be exceeded on
+    // real, fast native hardware, refusing/dropping connections the client
+    // never sees coming.
+    if (listen(listen_fd, 128) < 0) {
         perror("listen");
         return 1;
     }

