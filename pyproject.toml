@@ -5,6 +5,13 @@ description = "Automated ROP-chain exploit generator for 64-bit Linux ELF binari
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "Ved Prasad" }]
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
 dependencies = [
     "pyelftools>=0.31",
     "capstone>=5.0.1",
